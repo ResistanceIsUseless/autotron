@@ -273,3 +273,29 @@ func (c *Client) SeedDomain(ctx context.Context, fqdn string, scanRunID string) 
 	})
 	return err
 }
+
+// HasInScopeAncestor checks whether the given subdomain FQDN is reachable
+// via a CNAME chain from any in-scope subdomain. This is used to propagate
+// scope through CNAME chains: if campuscloud.io CNAMEs to azure.com which
+// resolves to an IP, that IP should be in-scope even though the azure.com
+// intermediary is not.
+func (c *Client) HasInScopeAncestor(ctx context.Context, fqdn string) (bool, error) {
+	session := c.driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeRead})
+	defer session.Close(ctx)
+
+	cypher := `MATCH (s:Subdomain {in_scope: true})-[:CNAME*1..10]->(t:Subdomain {fqdn: $fqdn})
+	           RETURN count(s) > 0 AS has_ancestor`
+
+	result, err := session.Run(ctx, cypher, map[string]any{"fqdn": fqdn})
+	if err != nil {
+		return false, fmt.Errorf("has in-scope ancestor %q: %w", fqdn, err)
+	}
+
+	if result.Next(ctx) {
+		val, _ := result.Record().Get("has_ancestor")
+		if b, ok := val.(bool); ok {
+			return b, nil
+		}
+	}
+	return false, nil
+}

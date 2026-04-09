@@ -271,8 +271,30 @@ func (e *Engine) dispatchJob(ctx context.Context, enricher config.EnricherDef, n
 	}
 
 	// Persist results — scope-check each node before upsert.
+	// Child nodes can inherit scope from the trigger node (e.g. an IP
+	// discovered by resolving an in-scope subdomain inherits that scope).
+	// For CNAME chains, check whether the trigger node has an in-scope
+	// ancestor even if the trigger itself is out of scope (e.g.
+	// campuscloud.io → CNAME → azure.com → RESOLVES_TO → IP).
+	triggerInScope := false
+	if v, ok := node.Props["in_scope"]; ok {
+		if b, ok := v.(bool); ok {
+			triggerInScope = b
+		}
+	}
+	// If trigger is out-of-scope but is a Subdomain, check for an in-scope
+	// ancestor via CNAME chain. This propagates scope through CNAME hops.
+	if !triggerInScope && node.Type == graph.NodeSubdomain {
+		if fqdn, _ := node.Props["fqdn"].(string); fqdn != "" {
+			if hasAncestor, err := e.graphClient.HasInScopeAncestor(ctx, fqdn); err == nil && hasAncestor {
+				triggerInScope = true
+				log.Debug("trigger inherits scope via CNAME chain", "fqdn", fqdn)
+			}
+		}
+	}
+
 	for _, n := range parseResult.Nodes {
-		inScope := e.scope.IsInScope(n)
+		inScope := e.scope.IsInScopeWithParent(n, triggerInScope)
 		n.Props["in_scope"] = inScope
 
 		if _, err := e.graphClient.UpsertNode(ctx, n); err != nil {

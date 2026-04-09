@@ -11,7 +11,10 @@ scope:
   domains:
     - "campuscloud.io"
 
-  # CIDRs: IP ranges in scope for enrichment.
+  # CIDRs: Optional IP ranges to explicitly mark in-scope for enrichment.
+  # Not required — IPs discovered by resolving in-scope subdomains
+  # automatically inherit in-scope status from their parent.
+  # Use this for pentests or internal networks where you know the ranges.
   cidrs: []
     # - "10.0.0.0/8"
     # - "192.168.1.0/24"
@@ -26,7 +29,7 @@ scope:
 budget:
   # Maximum dispatcher iterations before stopping. Each iteration processes
   # all pending nodes across all enrichers.
-  max_iterations: 5
+  max_iterations: 15
 
   # Maximum discovery chain length. Seeds are depth 0; each hop adds 1.
   max_discovery_depth: 6
