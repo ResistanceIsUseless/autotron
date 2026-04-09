@@ -1,0 +1,42 @@
+# ASM Pipeline — Global Configuration
+# See asm-pipeline-plan.md for full documentation.
+
+neo4j:
+  uri: "bolt://localhost:7687"
+  username: "neo4j"
+  password: "changeme"
+
+scope:
+  # Domains: suffix match. "example.com" matches *.example.com and example.com.
+  domains:
+    - "campuscloud.io"
+
+  # CIDRs: IP ranges in scope for enrichment.
+  cidrs: []
+    # - "10.0.0.0/8"
+    # - "192.168.1.0/24"
+
+  # ASNs: Autonomous System Numbers in scope.
+  asns: []
+    # - 13335  # Cloudflare
+
+  # Allow HTTP probing on bare IPs without a hostname.
+  ip_direct_http: false
+
+budget:
+  # Maximum dispatcher iterations before stopping. Each iteration processes
+  # all pending nodes across all enrichers.
+  max_iterations: 5
+
+  # Maximum discovery chain length. Seeds are depth 0; each hop adds 1.
+  max_discovery_depth: 6
+
+  # Global worker pool size. Defaults to NumCPU * 2 if 0.
+  global_workers: 0
+
+scan:
+  # Path to DNS resolvers file (used by dnsx, puredns, shuffledns).
+  resolvers_file: "/opt/resolvers.txt"
+
+  # Base output directory for tool artifacts (screenshots, XML, etc.)
+  output_dir: "./output"

@@ -1,0 +1,791 @@
+# ASM Pipeline — Enricher Definitions
+# Each entry defines a tool invocation: what triggers it, how to run it,
+# and which parser handles its output.
+#
+# parser: must match a registered parser name in internal/parsers/
+# subscribes.node_type: the Neo4j node label that triggers this enricher
+# subscribes.predicate: Cypher WHERE fragment (appended to dispatch query)
+#
+# To add a new tool with an existing output shape: copy a YAML block, change
+# name/bin/args. No Go code needed.
+
+enrichers:
+
+  # ===================================================================
+  # ACTIVE — Phase 1 (enabled: true)
+  # ===================================================================
+
+  # --- Domain-level enumeration ---
+
+  - name: subscope_domain
+    parser: subscope_json
+    subscribes:
+      node_type: Domain
+      predicate: "n.in_scope = true"
+    command:
+      bin: subscope
+      args:
+        - "-d"
+        - "{{.Node.fqdn}}"
+        - "-json"
+      timeout: 30m
+    concurrency: 2
+    enabled: true
+
+  - name: subfinder_domain
+    parser: hostname_list
+    subscribes:
+      node_type: Domain
+      predicate: "n.in_scope = true"
+    command:
+      bin: subfinder
+      args:
+        - "-d"
+        - "{{.Node.fqdn}}"
+        - "-silent"
+      timeout: 10m
+    concurrency: 4
+    enabled: true
+
+  # --- DNS resolution ---
+
+  - name: dnsx_resolve
+    parser: dns_resolver
+    subscribes:
+      node_type: Subdomain
+      predicate: "n.status = 'discovered'"
+    command:
+      bin: dnsx
+      args:
+        - "-json"
+        - "-a"
+        - "-aaaa"
+        - "-cname"
+        - "-resp"
+      stdin: "{{.Node.fqdn}}"
+      timeout: 5m
+    concurrency: 32
+    enabled: true
+
+  # --- IP enrichment ---
+
+  - name: ipintel_enrich
+    parser: ipintel_json
+    subscribes:
+      node_type: IP
+      predicate: "n.in_scope = true"
+    command:
+      bin: ipintel
+      args:
+        - "-ip"
+        - "{{.Node.address}}"
+        - "-json"
+      timeout: 2m
+    concurrency: 8
+    enabled: false  # ipintel not installed
+
+  # --- Port scanning ---
+
+  - name: naabu_scan
+    parser: port_scan
+    subscribes:
+      node_type: IP
+      predicate: "n.in_scope = true"
+    command:
+      bin: naabu
+      args:
+        - "-host"
+        - "{{.Node.address}}"
+        - "-json"
+        - "-top-ports"
+        - "1000"
+      timeout: 15m
+    concurrency: 4
+    enabled: true
+
+  # --- Service-specific nmap scans ---
+
+  - name: nmap_ssh
+    parser: nmap_xml
+    subscribes:
+      node_type: Service
+      predicate: "n.product = 'ssh' AND n.in_scope = true"
+    command:
+      bin: nmap
+      args:
+        - "-sV"
+        - "-Pn"
+        - "--script"
+        - "ssh-auth-methods,ssh2-enum-algos,ssh-hostkey"
+        - "-p"
+        - "{{.Node.port}}"
+        - "-oX"
+        - "-"
+        - "{{.Node.ip}}"
+      timeout: 5m
+    concurrency: 4
+    enabled: true
+
+  - name: nmap_smb
+    parser: nmap_xml
+    subscribes:
+      node_type: Service
+      predicate: "n.product = 'smb' AND n.in_scope = true"
+    command:
+      bin: nmap
+      args:
+        - "-sV"
+        - "-Pn"
+        - "--script"
+        - "smb-enum-shares,smb-enum-users,smb-os-discovery,smb-vuln-*"
+        - "-p"
+        - "{{.Node.port}}"
+        - "-oX"
+        - "-"
+        - "{{.Node.ip}}"
+      timeout: 10m
+    concurrency: 4
+    enabled: true
+
+  - name: nmap_http_scripts
+    parser: nmap_xml
+    subscribes:
+      node_type: Service
+      predicate: "n.product IN ['http', 'https'] AND n.in_scope = true"
+    command:
+      bin: nmap
+      args:
+        - "-sV"
+        - "-Pn"
+        - "--script"
+        - "http-enum,http-headers,http-methods,http-title,http-robots.txt"
+        - "-p"
+        - "{{.Node.port}}"
+        - "-oX"
+        - "-"
+        - "{{.Node.ip}}"
+      timeout: 10m
+    concurrency: 4
+    enabled: true
+
+  - name: nmap_ssl_enum
+    parser: nmap_xml
+    subscribes:
+      node_type: Service
+      predicate: "n.tls = true AND n.in_scope = true"
+    command:
+      bin: nmap
+      args:
+        - "-sV"
+        - "-Pn"
+        - "--script"
+        - "ssl-enum-ciphers,ssl-cert"
+        - "-p"
+        - "{{.Node.port}}"
+        - "-oX"
+        - "-"
+        - "{{.Node.ip}}"
+      timeout: 5m
+    concurrency: 4
+    enabled: true
+
+  # --- TLS / Certificate ---
+
+  - name: tlsx_cert
+    parser: tls_audit
+    subscribes:
+      node_type: Service
+      predicate: "n.tls = true AND n.in_scope = true"
+    command:
+      bin: tlsx
+      args:
+        - "-u"
+        - "{{.Node.ip}}:{{.Node.port}}"
+        - "-json"
+        - "-san"
+        - "-cn"
+        - "-so"
+        - "-cipher"
+        - "-hash"
+        - "sha256"
+      timeout: 2m
+    concurrency: 8
+    enabled: true
+
+  # --- HTTP probing (DNS-first rule) ---
+
+  - name: httpx_probe
+    parser: http_probe
+    subscribes:
+      node_type: Subdomain
+      predicate: >
+        n.in_scope = true AND EXISTS {
+          MATCH (n)-[:RESOLVES_TO]->(:IP)-[:HAS_SERVICE]->(svc:Service)
+          WHERE svc.product IN ['http', 'https']
+        }
+    command:
+      bin: /Users/matthew/.pdtm/go/bin/httpx
+      args:
+        - "-u"
+        - "{{.Node.fqdn}}"
+        - "-json"
+        - "-tech-detect"
+        - "-title"
+        - "-status-code"
+        - "-content-length"
+        - "-follow-redirects"
+      timeout: 5m
+    concurrency: 16
+    enabled: true
+
+  # --- Subdomain takeover ---
+
+  - name: subzy_takeover
+    parser: nuclei_jsonl
+    subscribes:
+      node_type: Subdomain
+      predicate: "n.status = 'resolved' AND n.has_dangling_cname = true"
+    command:
+      bin: nuclei
+      args:
+        - "-u"
+        - "{{.Node.fqdn}}"
+        - "-t"
+        - "takeovers/"
+        - "-jsonl"
+      timeout: 5m
+    concurrency: 4
+    enabled: true
+
+  # --- Web crawling / enrichment ---
+
+  - name: webscope_crawl
+    parser: webscope_jsonl
+    subscribes:
+      node_type: URL
+      predicate: "n.status_code >= 200 AND n.status_code <= 399"
+    command:
+      bin: webscope
+      args:
+        - "-u"
+        - "{{.Node.url}}"
+        - "-jsonl"
+      timeout: 15m
+    concurrency: 8
+    enabled: true
+
+  - name: katana_crawl
+    parser: url_list
+    subscribes:
+      node_type: URL
+      predicate: "n.status_code = 200"
+    command:
+      bin: katana
+      args:
+        - "-u"
+        - "{{.Node.url}}"
+        - "-silent"
+        - "-d"
+        - "3"
+      timeout: 10m
+    concurrency: 4
+    enabled: true
+
+  - name: gau_historical
+    parser: url_list
+    subscribes:
+      node_type: URL
+      predicate: "n.status_code = 200"
+    command:
+      bin: gau
+      args:
+        - "{{.Node.url}}"
+        - "--threads"
+        - "5"
+      timeout: 10m
+    concurrency: 4
+    enabled: true
+
+  - name: gowitness_shot
+    parser: screenshot
+    subscribes:
+      node_type: URL
+      predicate: "n.status_code = 200"
+    command:
+      bin: gowitness
+      args:
+        - "single"
+        - "{{.Node.url}}"
+        - "--destination"
+        - "{{.Config.output_dir}}/screenshots"
+      timeout: 2m
+    concurrency: 8
+    enabled: false  # gowitness not installed
+
+  # --- Parameter discovery ---
+
+  - name: arjun_params
+    parser: param_discovery
+    subscribes:
+      node_type: URL
+      predicate: "n.has_forms = true OR n.has_params = true"
+    command:
+      bin: arjun
+      args:
+        - "-u"
+        - "{{.Node.url}}"
+        - "-oJ"
+        - "-"
+      timeout: 10m
+    concurrency: 4
+    enabled: false  # arjun not installed
+
+  # --- Vulnerability probing ---
+
+  - name: proxyhawk_probe
+    parser: proxyhawk_json
+    subscribes:
+      node_type: URL
+      predicate: "n.has_params = true OR n.has_redirects = true"
+    command:
+      bin: proxyhawk
+      args:
+        - "-u"
+        - "{{.Node.url}}"
+        - "-json"
+      timeout: 5m
+    concurrency: 4
+    enabled: true
+
+  - name: trufflehog_exposed
+    parser: secret_scanner
+    subscribes:
+      node_type: URL
+      predicate: "n.path =~ '.*\\\\.(git|env|DS_Store).*'"
+    command:
+      bin: trufflehog
+      args:
+        - "filesystem"
+        - "--json"
+        - "{{.Node.url}}"
+      timeout: 10m
+    concurrency: 2
+    enabled: true
+
+  # --- JS analysis ---
+
+  - name: jsrecon_analyze
+    parser: jsrecon_json
+    subscribes:
+      node_type: JSFile
+      predicate: ""
+    command:
+      bin: jsrecon
+      args:
+        - "-u"
+        - "{{.Node.url}}"
+        - "-json"
+      timeout: 5m
+    concurrency: 16
+    enabled: false  # jsrecon not installed
+
+  # --- Nuclei (multiple invocations) ---
+
+  - name: nuclei_tech
+    parser: nuclei_jsonl
+    subscribes:
+      node_type: URL
+      predicate: "n.status_code = 200"
+    command:
+      bin: nuclei
+      args:
+        - "-u"
+        - "{{.Node.url}}"
+        - "-jsonl"
+        - "-severity"
+        - "low,medium,high,critical"
+      timeout: 30m
+    concurrency: 2
+    enabled: true
+
+  - name: nuclei_network
+    parser: nuclei_jsonl
+    subscribes:
+      node_type: Service
+      predicate: "NOT n.product IN ['http', 'https'] AND n.in_scope = true"
+    command:
+      bin: nuclei
+      args:
+        - "-u"
+        - "{{.Node.ip}}:{{.Node.port}}"
+        - "-t"
+        - "network/"
+        - "-jsonl"
+      timeout: 15m
+    concurrency: 2
+    enabled: true
+
+  # ===================================================================
+  # STUBBED — Phase 1 (enabled: false)
+  # Parser already exists; enabling is a one-line YAML change.
+  # ===================================================================
+
+  - name: amass_enum
+    parser: hostname_list
+    subscribes:
+      node_type: Domain
+      predicate: "n.in_scope = true"
+    command:
+      bin: amass
+      args: ["enum", "-passive", "-d", "{{.Node.fqdn}}"]
+      timeout: 30m
+    concurrency: 2
+    enabled: false
+
+  - name: assetfinder_enum
+    parser: hostname_list
+    subscribes:
+      node_type: Domain
+      predicate: "n.in_scope = true"
+    command:
+      bin: assetfinder
+      args: ["--subs-only", "{{.Node.fqdn}}"]
+      timeout: 5m
+    concurrency: 4
+    enabled: false
+
+  - name: crtsh_enum
+    parser: hostname_list
+    subscribes:
+      node_type: Domain
+      predicate: "n.in_scope = true"
+    command:
+      bin: curl
+      args: ["-s", "https://crt.sh/?q=%25.{{.Node.fqdn}}&output=json"]
+      timeout: 2m
+    concurrency: 2
+    enabled: false
+
+  - name: theharvester_enum
+    parser: hostname_list
+    subscribes:
+      node_type: Domain
+      predicate: "n.in_scope = true"
+    command:
+      bin: theHarvester
+      args: ["-d", "{{.Node.fqdn}}", "-b", "all"]
+      timeout: 15m
+    concurrency: 2
+    enabled: false
+
+  - name: dnstwist_enum
+    parser: hostname_list
+    subscribes:
+      node_type: Domain
+      predicate: "n.in_scope = true"
+    command:
+      bin: dnstwist
+      args: ["--registered", "-f", "json", "{{.Node.fqdn}}"]
+      timeout: 15m
+    concurrency: 2
+    enabled: false
+
+  - name: puredns_resolve
+    parser: dns_resolver
+    subscribes:
+      node_type: Subdomain
+      predicate: "n.status = 'discovered'"
+    command:
+      bin: puredns
+      args: ["resolve", "{{.Node.fqdn}}", "-r", "{{.Config.resolvers_file}}"]
+      timeout: 10m
+    concurrency: 4
+    enabled: false
+
+  - name: shuffledns_resolve
+    parser: dns_resolver
+    subscribes:
+      node_type: Subdomain
+      predicate: "n.status = 'discovered'"
+    command:
+      bin: shuffledns
+      args: ["-d", "{{.Node.fqdn}}", "-r", "{{.Config.resolvers_file}}", "-json"]
+      timeout: 10m
+    concurrency: 4
+    enabled: false
+
+  - name: massdns_resolve
+    parser: dns_resolver
+    subscribes:
+      node_type: Subdomain
+      predicate: "n.status = 'discovered'"
+    command:
+      bin: massdns
+      args: ["-r", "{{.Config.resolvers_file}}", "-t", "A", "-o", "J"]
+      timeout: 10m
+    concurrency: 4
+    enabled: false
+
+  - name: alterx_permute
+    parser: hostname_list
+    subscribes:
+      node_type: Domain
+      predicate: "n.in_scope = true"
+    command:
+      bin: alterx
+      args: ["-d", "{{.Node.fqdn}}", "-silent"]
+      timeout: 10m
+    concurrency: 2
+    enabled: false
+
+  - name: masscan_scan
+    parser: port_scan
+    subscribes:
+      node_type: IP
+      predicate: "n.in_scope = true"
+    command:
+      bin: masscan
+      args: ["-p", "1-65535", "--rate", "1000", "-oJ", "-", "{{.Node.address}}"]
+      timeout: 30m
+    concurrency: 2
+    enabled: false
+
+  - name: rustscan_scan
+    parser: port_scan
+    subscribes:
+      node_type: IP
+      predicate: "n.in_scope = true"
+    command:
+      bin: rustscan
+      args: ["-a", "{{.Node.address}}", "--", "-sV"]
+      timeout: 15m
+    concurrency: 4
+    enabled: false
+
+  - name: testssl_audit
+    parser: tls_audit
+    subscribes:
+      node_type: Service
+      predicate: "n.tls = true AND n.in_scope = true"
+    command:
+      bin: testssl.sh
+      args: ["--json", "{{.Node.ip}}:{{.Node.port}}"]
+      timeout: 15m
+    concurrency: 2
+    enabled: false
+
+  - name: sslyze_audit
+    parser: tls_audit
+    subscribes:
+      node_type: Service
+      predicate: "n.tls = true AND n.in_scope = true"
+    command:
+      bin: sslyze
+      args: ["--json_out=-", "{{.Node.ip}}:{{.Node.port}}"]
+      timeout: 10m
+    concurrency: 4
+    enabled: false
+
+  - name: waybackurls_hist
+    parser: url_list
+    subscribes:
+      node_type: URL
+      predicate: "n.status_code = 200"
+    command:
+      bin: waybackurls
+      args: ["{{.Node.url}}"]
+      timeout: 10m
+    concurrency: 4
+    enabled: false
+
+  - name: hakrawler_crawl
+    parser: url_list
+    subscribes:
+      node_type: URL
+      predicate: "n.status_code = 200"
+    command:
+      bin: hakrawler
+      args: ["-url", "{{.Node.url}}", "-plain", "-depth", "3"]
+      timeout: 10m
+    concurrency: 4
+    enabled: false
+
+  - name: gospider_crawl
+    parser: url_list
+    subscribes:
+      node_type: URL
+      predicate: "n.status_code = 200"
+    command:
+      bin: gospider
+      args: ["-s", "{{.Node.url}}", "-c", "10", "-d", "3"]
+      timeout: 15m
+    concurrency: 4
+    enabled: false
+
+  - name: feroxbuster_brute
+    parser: url_list
+    subscribes:
+      node_type: URL
+      predicate: "n.status_code = 200"
+    command:
+      bin: feroxbuster
+      args: ["-u", "{{.Node.url}}", "--json", "-q"]
+      timeout: 30m
+    concurrency: 2
+    enabled: false
+
+  - name: ffuf_fuzz
+    parser: url_list
+    subscribes:
+      node_type: URL
+      predicate: "n.status_code = 200"
+    command:
+      bin: ffuf
+      args: ["-u", "{{.Node.url}}/FUZZ", "-w", "/usr/share/wordlists/common.txt", "-o", "-", "-of", "json"]
+      timeout: 15m
+    concurrency: 2
+    enabled: false
+
+  - name: webanalyze_tech
+    parser: http_probe
+    subscribes:
+      node_type: URL
+      predicate: "n.status_code = 200"
+    command:
+      bin: webanalyze
+      args: ["-host", "{{.Node.url}}", "-output", "json"]
+      timeout: 5m
+    concurrency: 4
+    enabled: false
+
+  - name: linkfinder_js
+    parser: param_discovery
+    subscribes:
+      node_type: JSFile
+      predicate: ""
+    command:
+      bin: linkfinder
+      args: ["-i", "{{.Node.url}}", "-o", "cli"]
+      timeout: 5m
+    concurrency: 8
+    enabled: false
+
+  - name: kiterunner_api
+    parser: url_list
+    subscribes:
+      node_type: URL
+      predicate: "n.status_code = 200"
+    command:
+      bin: kr
+      args: ["scan", "{{.Node.url}}", "-A", "apiroutes-210228"]
+      timeout: 15m
+    concurrency: 2
+    enabled: false
+
+  - name: getjs_extract
+    parser: url_list
+    subscribes:
+      node_type: URL
+      predicate: "n.status_code = 200"
+    command:
+      bin: getJS
+      args: ["-url", "{{.Node.url}}", "-complete"]
+      timeout: 5m
+    concurrency: 8
+    enabled: false
+
+  - name: gitleaks_scan
+    parser: secret_scanner
+    subscribes:
+      node_type: URL
+      predicate: "n.path =~ '.*\\\\.(git|env).*'"
+    command:
+      bin: gitleaks
+      args: ["detect", "--source", "{{.Node.url}}", "--report-format", "json", "--report-path", "-"]
+      timeout: 10m
+    concurrency: 2
+    enabled: false
+
+  - name: enum4linux_smb
+    parser: smb_enum
+    subscribes:
+      node_type: Service
+      predicate: "n.product = 'smb' AND n.in_scope = true"
+    command:
+      bin: enum4linux-ng
+      args: ["-A", "-oJ", "-", "{{.Node.ip}}"]
+      timeout: 15m
+    concurrency: 2
+    enabled: false
+
+  - name: netexec_smb
+    parser: smb_enum
+    subscribes:
+      node_type: Service
+      predicate: "n.product = 'smb' AND n.in_scope = true"
+    command:
+      bin: netexec
+      args: ["smb", "{{.Node.ip}}", "--shares"]
+      timeout: 10m
+    concurrency: 2
+    enabled: false
+
+  - name: nikto_scan
+    parser: web_vuln_generic
+    subscribes:
+      node_type: URL
+      predicate: "n.status_code = 200"
+    command:
+      bin: nikto
+      args: ["-h", "{{.Node.url}}", "-Format", "json"]
+      timeout: 30m
+    concurrency: 2
+    enabled: false
+
+  - name: wapiti_scan
+    parser: web_vuln_generic
+    subscribes:
+      node_type: URL
+      predicate: "n.status_code = 200"
+    command:
+      bin: wapiti
+      args: ["-u", "{{.Node.url}}", "-f", "json", "-o", "-"]
+      timeout: 30m
+    concurrency: 2
+    enabled: false
+
+  - name: dalfox_xss
+    parser: web_vuln_generic
+    subscribes:
+      node_type: URL
+      predicate: "n.has_params = true"
+    command:
+      bin: dalfox
+      args: ["url", "{{.Node.url}}", "--format", "json"]
+      timeout: 15m
+    concurrency: 2
+    enabled: false
+
+  - name: corsy_cors
+    parser: web_vuln_generic
+    subscribes:
+      node_type: URL
+      predicate: "n.status_code = 200"
+    command:
+      bin: corsy
+      args: ["-u", "{{.Node.url}}", "-o", "json"]
+      timeout: 5m
+    concurrency: 4
+    enabled: false
+
+  - name: openssl_cert
+    parser: tls_audit
+    subscribes:
+      node_type: Service
+      predicate: "n.tls = true AND n.in_scope = true"
+    command:
+      bin: openssl
+      args: ["s_client", "-connect", "{{.Node.ip}}:{{.Node.port}}"]
+      timeout: 30s
+    concurrency: 8
+    enabled: false
