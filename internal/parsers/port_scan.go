@@ -11,11 +11,16 @@ import (
 	"github.com/resistanceisuseless/autotron/internal/graph"
 )
 
-// portScanParser handles tools that discover open ports on IPs:
+// portScanParser handles tools that discover open ports:
 // naabu, masscan, rustscan.
 //
 // Primary format: naabu JSON (-json), one object per line.
 // Fallback: plain text "ip:port" per line.
+//
+// When triggered by a Subdomain node (the primary flow), the parser creates
+// both IP and Service nodes from naabu output, plus IP→HAS_SERVICE edges.
+// When triggered by an IP node (legacy/alternative scanners), it creates
+// Service nodes and IP→HAS_SERVICE edges as before.
 //
 // Because naabu only reports open ports (not service identification), the parser
 // infers product and TLS status from well-known port numbers so that downstream
@@ -187,6 +192,7 @@ type naabuRecord struct {
 func (p *portScanParser) Parse(ctx context.Context, trigger graph.Node, stdout io.Reader, stderr io.Reader) (Result, error) {
 	var result Result
 	seen := make(map[string]bool)
+	seenIPs := make(map[string]bool)
 
 	scanner := bufio.NewScanner(stdout)
 	for scanner.Scan() {
@@ -231,6 +237,21 @@ func (p *portScanParser) Parse(ctx context.Context, trigger graph.Node, stdout i
 		}
 		seen[ipPort] = true
 
+		// Upsert IP node if not yet seen in this parse run.
+		// When triggered by a Subdomain, the IP may already exist from DNS
+		// resolution but we upsert to be safe. When triggered by an IP node
+		// (legacy/alternative scanners), this is a harmless no-op.
+		if !seenIPs[ip] {
+			seenIPs[ip] = true
+			result.Nodes = append(result.Nodes, graph.Node{
+				Type:       graph.NodeIP,
+				PrimaryKey: ip,
+				Props: map[string]any{
+					"address": ip,
+				},
+			})
+		}
+
 		// Infer product and TLS from well-known port numbers.
 		props := map[string]any{
 			"ip_port": ipPort,
@@ -251,16 +272,14 @@ func (p *portScanParser) Parse(ctx context.Context, trigger graph.Node, stdout i
 			Props:      props,
 		})
 
-		// Edge from triggering IP to the service.
-		if trigger.Type == graph.NodeIP {
-			result.Edges = append(result.Edges, graph.Edge{
-				Type:     graph.RelHAS_SERVICE,
-				FromType: graph.NodeIP,
-				FromKey:  trigger.PrimaryKey,
-				ToType:   graph.NodeService,
-				ToKey:    ipPort,
-			})
-		}
+		// IP → HAS_SERVICE → Service edge (always, regardless of trigger type).
+		result.Edges = append(result.Edges, graph.Edge{
+			Type:     graph.RelHAS_SERVICE,
+			FromType: graph.NodeIP,
+			FromKey:  ip,
+			ToType:   graph.NodeService,
+			ToKey:    ipPort,
+		})
 	}
 
 	return result, scanner.Err()

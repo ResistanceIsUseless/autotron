@@ -88,19 +88,28 @@ enrichers:
     concurrency: 8
     enabled: false  # ipintel not installed
 
-  # --- Port scanning ---
+  # --- Port scanning (subdomain-centric) ---
+  # naabu subscribes to Subdomain (not IP) so the pipeline stays
+  # subdomain-driven: Domain → Subdomain → DNS → Port Scan → Service.
+  # naabu resolves the FQDN internally and scans all associated IPs (-sa).
+  # The port_scan parser creates IP + Service nodes and edges from the output.
 
   - name: naabu_scan
     parser: port_scan
     subscribes:
-      node_type: IP
-      predicate: "n.in_scope = true AND NOT n.address CONTAINS ':'"
+      node_type: Subdomain
+      predicate: >
+        n.in_scope = true AND n.status IN ['resolved', 'discovered'] AND EXISTS {
+          MATCH (n)-[:RESOLVES_TO]->(i:IP)
+          WHERE NOT i.address CONTAINS ':'
+        }
     command:
       bin: naabu
       args:
         - "-host"
-        - "{{.Node.address}}"
+        - "{{.Node.fqdn}}"
         - "-json"
+        - "-sa"
         - "-p"
         - "22,80,139,389,443,445,623,631,636,999,1080,1880,1098,1099,2379,2443,3128,3389-3398,3443,3632,4001,4443,4848,5001,5002,5443,5800,5836,5900-5910,5985,5986,6002,6379,6782-6784,6739,6443,7001,7002,7071,7443,8000-8010,8080,8081,8118,8443,8444,8500,8888,9001,9060,9090,9093,9099,9100,9443,9901,9999,10000,10250,10255,10256,11211,38801,53281"
         - "-exclude-cdn"
