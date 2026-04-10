@@ -51,6 +51,14 @@ Neo4j graph state after 2 interrupted runs (bash timeout, not tool failure):
 - [x] DNS-first rule applies exclusively to web enrichers (httpx, webscope) that need vhost-correct requests
 - [x] nmap HTTP scripts correctly target IPs via `{{.Node.ip}}`, same as nmap_ssh, nmap_smb, nmap_ssl_enum
 
+### Subdomain-centric port scanning
+- [x] naabu now subscribes to `Subdomain` nodes instead of `IP` nodes
+- [x] Pipeline flow: Domain → Subdomain → DNS → Port Scan → Service (all subdomain-driven)
+- [x] Uses `-host {{.Node.fqdn}} -sa` (naabu resolves + scans all IPs internally)
+- [x] Predicate: `in_scope AND status IN ['resolved','discovered'] AND EXISTS resolved IPv4`
+- [x] port_scan parser now creates IP nodes + IP→HAS_SERVICE edges from naabu output
+- [x] IP fan-out max 4 subdomains/IP — acceptable redundancy with -exclude-cdn
+
 ## Previous Session — Full Phase 1 scaffold
 
 ### Core infrastructure
