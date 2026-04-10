@@ -27,7 +27,11 @@ enrichers:
       args:
         - "-d"
         - "{{.Node.fqdn}}"
-        - "-json"
+        - "-o"
+        - "-"
+        - "-p"
+        - "--ct"
+        - "--arin"
       timeout: 30m
     concurrency: 2
     enabled: true
@@ -90,17 +94,23 @@ enrichers:
     parser: port_scan
     subscribes:
       node_type: IP
-      predicate: "n.in_scope = true"
+      predicate: "n.in_scope = true AND NOT n.address CONTAINS ':'"
     command:
       bin: naabu
       args:
         - "-host"
         - "{{.Node.address}}"
         - "-json"
-        - "-top-ports"
+        - "-p"
+        - "22,80,139,389,443,445,623,631,636,999,1080,1880,1098,1099,2379,2443,3128,3389-3398,3443,3632,4001,4443,4848,5001,5002,5443,5800,5836,5900-5910,5985,5986,6002,6379,6782-6784,6739,6443,7001,7002,7071,7443,8000-8010,8080,8081,8118,8443,8444,8500,8888,9001,9060,9090,9093,9099,9100,9443,9901,9999,10000,10250,10255,10256,11211,38801,53281"
+        - "-exclude-cdn"
+        - "-c"
+        - "50"
+        - "-rate"
         - "1000"
-      timeout: 15m
-    concurrency: 4
+        - "-Pn"
+      timeout: 5m
+    concurrency: 8
     enabled: true
 
   # --- Service-specific nmap scans ---

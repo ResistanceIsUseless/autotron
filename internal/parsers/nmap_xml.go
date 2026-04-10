@@ -1,6 +1,7 @@
 package parsers
 
 import (
+	"bytes"
 	"context"
 	"encoding/xml"
 	"fmt"
@@ -90,8 +91,20 @@ type nmapElem struct {
 }
 
 func (p *nmapXMLParser) Parse(ctx context.Context, trigger graph.Node, stdout io.Reader, stderr io.Reader) (Result, error) {
+	raw, err := io.ReadAll(stdout)
+	if err != nil {
+		return Result{}, fmt.Errorf("read nmap output: %w", err)
+	}
+
+	// Some hosts return truncated XML (e.g. no response, connection refused).
+	// If the output is empty or doesn't contain a closing tag, try to
+	// decode what we have; on failure return empty result rather than an error.
 	var run nmapRun
-	if err := xml.NewDecoder(stdout).Decode(&run); err != nil {
+	if err := xml.Unmarshal(raw, &run); err != nil {
+		// If we got nothing useful, log it but don't fail the pipeline.
+		if len(raw) == 0 || !bytes.Contains(raw, []byte("<host")) {
+			return Result{}, nil // no host data to parse
+		}
 		return Result{}, fmt.Errorf("decode nmap XML: %w", err)
 	}
 

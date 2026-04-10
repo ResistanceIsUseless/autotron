@@ -29,3 +29,7 @@ Thumbs.db
 # Tool output
 output/
 screenshots/
+scan.log
+
+# Stray nmap output file (nmap -oX - can create a literal '-' file)
+-

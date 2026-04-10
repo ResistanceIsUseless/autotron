@@ -1,6 +1,7 @@
 package parsers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -50,8 +51,21 @@ type subscopeCloud struct {
 }
 
 func (p *subscopeJSONParser) Parse(ctx context.Context, trigger graph.Node, stdout io.Reader, stderr io.Reader) (Result, error) {
+	// subscope writes progress text to stdout before the JSON object.
+	// Read all output, find the first '{', and decode from there.
+	raw, err := io.ReadAll(stdout)
+	if err != nil {
+		return Result{}, fmt.Errorf("read subscope output: %w", err)
+	}
+
+	idx := bytes.IndexByte(raw, '{')
+	if idx < 0 {
+		return Result{}, fmt.Errorf("subscope output contains no JSON object (got %d bytes of text)", len(raw))
+	}
+	raw = raw[idx:]
+
 	var output subscopeOutput
-	if err := json.NewDecoder(stdout).Decode(&output); err != nil {
+	if err := json.Unmarshal(raw, &output); err != nil {
 		return Result{}, fmt.Errorf("decode subscope JSON: %w", err)
 	}
 
