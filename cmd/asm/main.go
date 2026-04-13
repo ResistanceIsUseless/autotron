@@ -53,6 +53,7 @@ func main() {
 	rootCmd.AddCommand(scanCmd())
 	rootCmd.AddCommand(validateCmd())
 	rootCmd.AddCommand(reportCmd())
+	rootCmd.AddCommand(profileCmd())
 	rootCmd.AddCommand(webUICmd())
 
 	if err := rootCmd.Execute(); err != nil {

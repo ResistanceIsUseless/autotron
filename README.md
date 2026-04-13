@@ -175,6 +175,19 @@ go run ./cmd/asm report --host api.example.com --format markdown --save
 go run ./cmd/asm webui --addr :8090
 ```
 
+8. Preview or apply enricher profiles:
+
+```bash
+# list profiles
+asm profile --list
+
+# dry-run preview
+asm profile --name passive-plus
+
+# apply profile changes to configs/enrichers.yaml
+asm profile --name passive-plus --apply
+```
+
 ## Build
 
 ```bash
