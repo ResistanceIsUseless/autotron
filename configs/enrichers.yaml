@@ -360,6 +360,24 @@ enrichers:
     concurrency: 8
     enabled: false  # gowitness not installed
 
+  - name: screenshot_cluster
+    parser: visual_cluster_json
+    subscribes:
+      node_type: URL
+      predicate: "n.status_code = 200 AND n.screenshot_path IS NOT NULL AND n.screenshot_path <> ''"
+    command:
+      bin: screenshot-cluster
+      args:
+        - "--url"
+        - "{{.Node.url}}"
+        - "--screenshot"
+        - "{{.Node.screenshot_path}}"
+        - "--json"
+      timeout: 2m
+      retries: 1
+    concurrency: 4
+    enabled: false
+
   # --- Parameter discovery ---
 
   - name: arjun_params
@@ -887,6 +905,28 @@ enrichers:
     concurrency: 2
     enabled: false
 
+  - name: yandex_dork_passive
+    parser: search_dork_json
+    subscribes:
+      node_type: Domain
+      predicate: "n.in_scope = true"
+    command:
+      bin: dorkintel
+      args:
+        - "--engine"
+        - "yandex"
+        - "--domain"
+        - "{{.Node.fqdn}}"
+        - "--json"
+        - "--max-results"
+        - "30"
+        - "--delay"
+        - "750ms"
+      timeout: 10m
+      retries: 1
+    concurrency: 2
+    enabled: false
+
   # --- Internet-wide passive exposure ---
 
   - name: shodan_host_passive
@@ -922,6 +962,26 @@ enrichers:
     concurrency: 4
     enabled: false
 
+  - name: fofa_host_passive
+    parser: exposure_passive_json
+    subscribes:
+      node_type: IP
+      predicate: "n.in_scope = true"
+    command:
+      bin: exposure-intel
+      args:
+        - "--provider"
+        - "fofa"
+        - "--ip"
+        - "{{.Node.address}}"
+        - "--json"
+        - "--max-services"
+        - "100"
+      timeout: 3m
+      retries: 1
+    concurrency: 4
+    enabled: false
+
   # --- Cloud posture checks ---
 
   - name: s3_bucket_enum
@@ -931,7 +991,14 @@ enrichers:
       predicate: "n.in_scope = true"
     command:
       bin: cloud-bucket-check
-      args: ["--provider", "aws", "--domain", "{{.Node.fqdn}}", "--json"]
+      args:
+        - "--provider"
+        - "aws"
+        - "--domain"
+        - "{{.Node.fqdn}}"
+        - "--json"
+        - "--max-candidates"
+        - "8"
       timeout: 5m
       retries: 1
     concurrency: 2
@@ -944,7 +1011,34 @@ enrichers:
       predicate: "n.in_scope = true"
     command:
       bin: cloud-bucket-check
-      args: ["--provider", "gcp", "--domain", "{{.Node.fqdn}}", "--json"]
+      args:
+        - "--provider"
+        - "gcp"
+        - "--domain"
+        - "{{.Node.fqdn}}"
+        - "--json"
+        - "--max-candidates"
+        - "8"
+      timeout: 5m
+      retries: 1
+    concurrency: 2
+    enabled: false
+
+  - name: azure_blob_enum
+    parser: cloud_bucket_json
+    subscribes:
+      node_type: Domain
+      predicate: "n.in_scope = true"
+    command:
+      bin: cloud-bucket-check
+      args:
+        - "--provider"
+        - "azure"
+        - "--domain"
+        - "{{.Node.fqdn}}"
+        - "--json"
+        - "--max-candidates"
+        - "8"
       timeout: 5m
       retries: 1
     concurrency: 2
@@ -962,6 +1056,26 @@ enrichers:
       args:
         - "--provider"
         - "github"
+        - "--domain"
+        - "{{.Node.fqdn}}"
+        - "--json"
+        - "--max-results"
+        - "50"
+      timeout: 5m
+      retries: 1
+    concurrency: 2
+    enabled: false
+
+  - name: gitlab_code_search_passive
+    parser: repo_leak_json
+    subscribes:
+      node_type: Domain
+      predicate: "n.in_scope = true"
+    command:
+      bin: repo-intel
+      args:
+        - "--provider"
+        - "gitlab"
         - "--domain"
         - "{{.Node.fqdn}}"
         - "--json"
@@ -1012,6 +1126,26 @@ enrichers:
     concurrency: 4
     enabled: false
 
+  - name: api_authz_heuristics
+    parser: api_surface_json
+    subscribes:
+      node_type: URL
+      predicate: "n.status_code = 200"
+    command:
+      bin: api-surface
+      args:
+        - "--url"
+        - "{{.Node.url}}"
+        - "--mode"
+        - "authz"
+        - "--json"
+        - "--max-endpoints"
+        - "50"
+      timeout: 10m
+      retries: 1
+    concurrency: 4
+    enabled: false
+
   # --- Auth / identity posture ---
 
   - name: oidc_discovery
@@ -1021,7 +1155,48 @@ enrichers:
       predicate: "n.status_code = 200"
     command:
       bin: auth-surface
-      args: ["--url", "{{.Node.url}}", "--mode", "oidc", "--json"]
+      args:
+        - "--url"
+        - "{{.Node.url}}"
+        - "--mode"
+        - "oidc"
+        - "--json"
+      timeout: 5m
+      retries: 1
+    concurrency: 4
+    enabled: false
+
+  - name: oauth_misconfig_probe
+    parser: auth_surface_json
+    subscribes:
+      node_type: URL
+      predicate: "n.status_code = 200"
+    command:
+      bin: auth-surface
+      args:
+        - "--url"
+        - "{{.Node.url}}"
+        - "--mode"
+        - "oauth"
+        - "--json"
+      timeout: 5m
+      retries: 1
+    concurrency: 4
+    enabled: false
+
+  - name: saml_metadata_enum
+    parser: auth_surface_json
+    subscribes:
+      node_type: URL
+      predicate: "n.status_code = 200"
+    command:
+      bin: auth-surface
+      args:
+        - "--url"
+        - "{{.Node.url}}"
+        - "--mode"
+        - "saml"
+        - "--json"
       timeout: 5m
       retries: 1
     concurrency: 4
@@ -1036,7 +1211,102 @@ enrichers:
       predicate: "n.status_code = 200"
     command:
       bin: web-advanced
-      args: ["--url", "{{.Node.url}}", "--check", "desync", "--json"]
+      args:
+        - "--url"
+        - "{{.Node.url}}"
+        - "--check"
+        - "desync"
+        - "--json"
+      timeout: 10m
+      retries: 1
+    concurrency: 2
+    enabled: false
+
+  - name: cache_poison_probe
+    parser: http_advanced_vuln_json
+    subscribes:
+      node_type: URL
+      predicate: "n.status_code = 200"
+    command:
+      bin: web-advanced
+      args:
+        - "--url"
+        - "{{.Node.url}}"
+        - "--check"
+        - "cache-poison"
+        - "--json"
+      timeout: 10m
+      retries: 1
+    concurrency: 2
+    enabled: false
+
+  - name: waf_diff_probe
+    parser: http_advanced_vuln_json
+    subscribes:
+      node_type: URL
+      predicate: "n.status_code = 200"
+    command:
+      bin: web-advanced
+      args:
+        - "--url"
+        - "{{.Node.url}}"
+        - "--check"
+        - "waf-diff"
+        - "--json"
+      timeout: 10m
+      retries: 1
+    concurrency: 2
+    enabled: false
+
+  - name: ssrf_gadget_discovery
+    parser: web_vuln_generic
+    subscribes:
+      node_type: URL
+      predicate: "n.status_code = 200"
+    command:
+      bin: web-advanced
+      args:
+        - "--url"
+        - "{{.Node.url}}"
+        - "--check"
+        - "waf-diff"
+        - "--json"
+      timeout: 10m
+      retries: 1
+    concurrency: 2
+    enabled: false
+
+  - name: idor_candidate_mapper
+    parser: web_vuln_generic
+    subscribes:
+      node_type: Endpoint
+      predicate: "n.in_scope = true"
+    command:
+      bin: web-advanced
+      args:
+        - "--url"
+        - "{{.Node.url}}{{.Node.path}}"
+        - "--check"
+        - "cache-poison"
+        - "--json"
+      timeout: 10m
+      retries: 1
+    concurrency: 2
+    enabled: false
+
+  - name: csrf_policy_audit
+    parser: web_vuln_generic
+    subscribes:
+      node_type: Endpoint
+      predicate: "n.in_scope = true"
+    command:
+      bin: web-advanced
+      args:
+        - "--url"
+        - "{{.Node.url}}{{.Node.path}}"
+        - "--check"
+        - "desync"
+        - "--json"
       timeout: 10m
       retries: 1
     concurrency: 2
@@ -1051,8 +1321,119 @@ enrichers:
       predicate: "n.in_scope = true"
     command:
       bin: mail-posture
-      args: ["--domain", "{{.Node.fqdn}}", "--json"]
+      args:
+        - "--domain"
+        - "{{.Node.fqdn}}"
+        - "--json"
       timeout: 5m
       retries: 1
     concurrency: 2
+    enabled: false
+
+  # --- Mobile artifact recon ---
+
+  - name: apk_endpoint_extract
+    parser: mobile_artifact_json
+    subscribes:
+      node_type: URL
+      predicate: "n.path =~ '.*\\.(apk|xapk)$'"
+    command:
+      bin: mobile-artifact
+      args:
+        - "--artifact-url"
+        - "{{.Node.url}}"
+        - "--artifact-type"
+        - "apk"
+        - "--json"
+        - "--max-endpoints"
+        - "200"
+      timeout: 10m
+      retries: 1
+    concurrency: 2
+    enabled: false
+
+  - name: ipa_endpoint_extract
+    parser: mobile_artifact_json
+    subscribes:
+      node_type: URL
+      predicate: "n.path =~ '.*\\.ipa$'"
+    command:
+      bin: mobile-artifact
+      args:
+        - "--artifact-url"
+        - "{{.Node.url}}"
+        - "--artifact-type"
+        - "ipa"
+        - "--json"
+        - "--max-endpoints"
+        - "200"
+      timeout: 10m
+      retries: 1
+    concurrency: 2
+    enabled: false
+
+  # --- Continuous drift / delta intelligence ---
+
+  - name: delta_new_exposure
+    parser: delta_report_json
+    subscribes:
+      node_type: ScanRun
+      predicate: "n.status = 'completed'"
+    command:
+      bin: delta-intel
+      args:
+        - "--run-id"
+        - "{{.Node.id}}"
+        - "--state-dir"
+        - "{{.Config.output_dir}}/delta"
+        - "--check"
+        - "new-exposure"
+        - "--json"
+        - "--min-growth-ratio"
+        - "1.25"
+      timeout: 30s
+      retries: 1
+    concurrency: 1
+    enabled: false
+
+  - name: delta_new_findings
+    parser: delta_report_json
+    subscribes:
+      node_type: ScanRun
+      predicate: "n.status = 'completed'"
+    command:
+      bin: delta-intel
+      args:
+        - "--run-id"
+        - "{{.Node.id}}"
+        - "--state-dir"
+        - "{{.Config.output_dir}}/delta"
+        - "--check"
+        - "new-findings"
+        - "--json"
+        - "--min-growth-ratio"
+        - "1.25"
+      timeout: 30s
+      retries: 1
+    concurrency: 1
+    enabled: false
+
+  - name: delta_surface_regression
+    parser: delta_report_json
+    subscribes:
+      node_type: ScanRun
+      predicate: "n.status = 'completed'"
+    command:
+      bin: delta-intel
+      args:
+        - "--run-id"
+        - "{{.Node.id}}"
+        - "--state-dir"
+        - "{{.Config.output_dir}}/delta"
+        - "--check"
+        - "surface-regression"
+        - "--json"
+      timeout: 30s
+      retries: 1
+    concurrency: 1
     enabled: false

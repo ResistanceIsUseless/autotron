@@ -43,3 +43,6 @@ scan:
 
   # Base output directory for tool artifacts (screenshots, XML, etc.)
   output_dir: "./output"
+
+  # jsRecon API base URL used by `asm webui` when --jsrecon is not provided.
+  jsrecon_base: "http://localhost:37232"

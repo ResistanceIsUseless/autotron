@@ -100,13 +100,16 @@ func ValidateTemplates(args []string, stdinTmpl string) error {
 	// Build synthetic data with placeholder values to verify templates parse.
 	synth := TemplateData{
 		Node: map[string]any{
-			"fqdn":    "test.example.com",
-			"ip":      "127.0.0.1",
-			"port":    "443",
-			"address": "127.0.0.1",
-			"ip_port": "127.0.0.1:443",
-			"url":     "https://test.example.com",
-			"product": "http",
+			"id":              "validate-node",
+			"fqdn":            "test.example.com",
+			"ip":              "127.0.0.1",
+			"port":            "443",
+			"address":         "127.0.0.1",
+			"ip_port":         "127.0.0.1:443",
+			"url":             "https://test.example.com",
+			"path":            "/artifact.apk",
+			"screenshot_path": "/tmp/output/screenshots/test.png",
+			"product":         "http",
 		},
 		Edge: map[string]any{
 			"resolved_ip":     "127.0.0.1",

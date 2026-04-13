@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -23,6 +25,9 @@ type config struct {
 	maxServices   int
 	shodanKey     string
 	shodanBaseURL string
+	fofaEmail     string
+	fofaKey       string
+	fofaBaseURL   string
 }
 
 type outputRecord struct {
@@ -55,6 +60,18 @@ type shodanBanner struct {
 	} `json:"_shodan"`
 }
 
+type fofaSearchResponse struct {
+	Error   bool     `json:"error"`
+	ErrMsg  string   `json:"errmsg"`
+	Results [][]any  `json:"results"`
+	Mode    string   `json:"mode"`
+	Query   string   `json:"query"`
+	Page    int      `json:"page"`
+	Size    int      `json:"size"`
+	Total   int64    `json:"total"`
+	Fields  []string `json:"fields"`
+}
+
 func main() {
 	cfg := parseFlags()
 	if err := run(cfg); err != nil {
@@ -65,13 +82,16 @@ func main() {
 
 func parseFlags() config {
 	var cfg config
-	flag.StringVar(&cfg.provider, "provider", "shodan", "provider to query (shodan)")
+	flag.StringVar(&cfg.provider, "provider", "shodan", "provider to query (shodan|fofa)")
 	flag.StringVar(&cfg.ip, "ip", "", "target IP address")
 	flag.BoolVar(&cfg.jsonOutput, "json", false, "emit JSONL records")
 	flag.DurationVar(&cfg.timeout, "timeout", 20*time.Second, "HTTP timeout per request")
 	flag.IntVar(&cfg.maxServices, "max-services", 100, "maximum number of service records to emit")
 	flag.StringVar(&cfg.shodanKey, "shodan-key", "", "Shodan API key (or SHODAN_API_KEY)")
 	flag.StringVar(&cfg.shodanBaseURL, "shodan-base-url", "https://api.shodan.io", "Shodan API base URL")
+	flag.StringVar(&cfg.fofaEmail, "fofa-email", "", "FOFA account email (or FOFA_EMAIL)")
+	flag.StringVar(&cfg.fofaKey, "fofa-key", "", "FOFA API key (or FOFA_KEY)")
+	flag.StringVar(&cfg.fofaBaseURL, "fofa-base-url", "https://fofa.info", "FOFA API base URL")
 	flag.Parse()
 	return cfg
 }
@@ -91,22 +111,43 @@ func run(cfg config) error {
 	}
 
 	provider := strings.ToLower(strings.TrimSpace(cfg.provider))
-	if provider != "shodan" {
-		return fmt.Errorf("unsupported --provider %q (supported: shodan)", cfg.provider)
+	if provider != "shodan" && provider != "fofa" {
+		return fmt.Errorf("unsupported --provider %q (supported: shodan|fofa)", cfg.provider)
 	}
 
-	key := strings.TrimSpace(cfg.shodanKey)
-	if key == "" {
-		key = strings.TrimSpace(os.Getenv("SHODAN_API_KEY"))
+	shodanKey := strings.TrimSpace(cfg.shodanKey)
+	if shodanKey == "" {
+		shodanKey = strings.TrimSpace(os.Getenv("SHODAN_API_KEY"))
 	}
-	if key == "" {
+	fofaEmail := strings.TrimSpace(cfg.fofaEmail)
+	if fofaEmail == "" {
+		fofaEmail = strings.TrimSpace(os.Getenv("FOFA_EMAIL"))
+	}
+	fofaKey := strings.TrimSpace(cfg.fofaKey)
+	if fofaKey == "" {
+		fofaKey = strings.TrimSpace(os.Getenv("FOFA_KEY"))
+	}
+
+	if provider == "shodan" && shodanKey == "" {
 		return errors.New("missing Shodan API key (set SHODAN_API_KEY)")
+	}
+	if provider == "fofa" && (fofaEmail == "" || fofaKey == "") {
+		return errors.New("missing FOFA credentials (set FOFA_EMAIL and FOFA_KEY)")
 	}
 
 	client := &http.Client{Timeout: cfg.timeout}
 	ctx := context.Background()
 
-	records, err := shodanLookup(ctx, client, cfg.shodanBaseURL, key, cfg.ip, cfg.maxServices)
+	var (
+		records []outputRecord
+		err     error
+	)
+	switch provider {
+	case "shodan":
+		records, err = shodanLookup(ctx, client, cfg.shodanBaseURL, shodanKey, cfg.ip, cfg.maxServices)
+	case "fofa":
+		records, err = fofaLookup(ctx, client, cfg.fofaBaseURL, fofaEmail, fofaKey, cfg.ip, cfg.maxServices)
+	}
 	if err != nil {
 		return err
 	}
@@ -199,6 +240,95 @@ func shodanLookup(ctx context.Context, client *http.Client, baseURL, key, ip str
 	return out, nil
 }
 
+func fofaLookup(ctx context.Context, client *http.Client, baseURL, email, key, ip string, maxServices int) ([]outputRecord, error) {
+	baseURL = strings.TrimSpace(strings.TrimSuffix(baseURL, "/"))
+	if baseURL == "" {
+		baseURL = "https://fofa.info"
+	}
+
+	u, err := url.Parse(baseURL + "/api/v1/search/all")
+	if err != nil {
+		return nil, err
+	}
+
+	query := fmt.Sprintf(`ip="%s"`, ip)
+	qbase64 := base64.StdEncoding.EncodeToString([]byte(query))
+	v := u.Query()
+	v.Set("email", email)
+	v.Set("key", key)
+	v.Set("qbase64", qbase64)
+	v.Set("fields", "host,ip,port,protocol,title,server")
+	v.Set("size", fmt.Sprintf("%d", min(maxServices, 10000)))
+	v.Set("page", "1")
+	u.RawQuery = v.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("fofa api: %s", resp.Status)
+	}
+
+	var parsed fofaSearchResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("decode fofa response: %w", err)
+	}
+	if parsed.Error {
+		msg := strings.TrimSpace(parsed.ErrMsg)
+		if msg == "" {
+			msg = "unknown error"
+		}
+		return nil, fmt.Errorf("fofa api: %s", msg)
+	}
+
+	out := make([]outputRecord, 0, len(parsed.Results))
+	for _, row := range parsed.Results {
+		host := toStringAt(row, 0)
+		rowIP := toStringAt(row, 1)
+		port := toIntAt(row, 2)
+		protocol := strings.ToLower(toStringAt(row, 3))
+		title := toStringAt(row, 4)
+		server := toStringAt(row, 5)
+
+		if rowIP == "" {
+			rowIP = ip
+		}
+		if port <= 0 || port > 65535 {
+			continue
+		}
+		if protocol == "" {
+			protocol = "tcp"
+		}
+
+		service := classifyServiceFromFOFA(port, protocol, server, title, host)
+		out = append(out, outputRecord{
+			Provider: "fofa",
+			IP:       rowIP,
+			Port:     port,
+			Protocol: protocol,
+			Service:  service,
+			Product:  strings.TrimSpace(server),
+			Version:  "",
+			Banner:   strings.TrimSpace(title),
+			Risk:     classifyRisk(nil, port, service),
+		})
+		if len(out) >= maxServices {
+			break
+		}
+	}
+
+	return out, nil
+}
+
 func classifyService(b shodanBanner) string {
 	mod := strings.ToLower(strings.TrimSpace(b.Shodan.Module))
 	if mod != "" {
@@ -254,6 +384,59 @@ func mapKeys(m map[string]json.RawMessage) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+func toStringAt(row []any, idx int) string {
+	if idx < 0 || idx >= len(row) || row[idx] == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprintf("%v", row[idx]))
+}
+
+func toIntAt(row []any, idx int) int {
+	if idx < 0 || idx >= len(row) || row[idx] == nil {
+		return 0
+	}
+	s := strings.TrimSpace(fmt.Sprintf("%v", row[idx]))
+	if s == "" {
+		return 0
+	}
+	var n int
+	_, err := fmt.Sscanf(s, "%d", &n)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+func classifyServiceFromFOFA(port int, protocol, server, title, host string) string {
+	joined := strings.ToLower(strings.TrimSpace(protocol + " " + server + " " + title + " " + host))
+	if strings.Contains(joined, "http") || strings.Contains(joined, "https") {
+		if strings.Contains(joined, "https") || port == 443 {
+			return "https"
+		}
+		return "http"
+	}
+	if strings.Contains(joined, "ssh") {
+		return "ssh"
+	}
+	if strings.Contains(joined, "redis") {
+		return "redis"
+	}
+	if strings.Contains(joined, "smtp") {
+		return "smtp"
+	}
+	if svc, ok := commonPortServices[port]; ok {
+		return svc
+	}
+	return "unknown"
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 var commonPortServices = map[int]string{

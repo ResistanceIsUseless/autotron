@@ -24,6 +24,7 @@ type Engine struct {
 	runner      *runner.Runner
 	scope       *ScopeValidator
 	dedup       *DedupTracker
+	metrics     *runMetrics
 	enrichers   []config.EnricherDef
 	cfg         *config.Config
 	logger      *slog.Logger
@@ -64,8 +65,62 @@ func NewEngine(
 // Run executes the enrichment loop. It seeds the graph with the given domains,
 // then dispatches enrichers in iterations until no new work is found or the
 // budget is exhausted.
-func (e *Engine) Run(ctx context.Context, domains []string) error {
+func (e *Engine) Run(ctx context.Context, domains []string) (err error) {
 	scanRunID := uuid.New().String()
+	startedAt := time.Now().UTC()
+	target := strings.Join(domains, ",")
+	e.metrics = newRunMetrics()
+
+	if _, upsertErr := e.graphClient.UpsertNode(ctx, graph.Node{
+		Type:       graph.NodeScanRun,
+		PrimaryKey: scanRunID,
+		Props: map[string]any{
+			"id":           scanRunID,
+			"target":       target,
+			"domains":      domains,
+			"domain_count": len(domains),
+			"status":       "running",
+			"started_at":   startedAt.Format(time.RFC3339),
+		},
+	}); upsertErr != nil {
+		e.logger.Warn("failed to persist scan run start", "scan_run_id", scanRunID, "error", upsertErr)
+	}
+
+	defer func() {
+		status := "completed"
+		if err != nil {
+			if ctx.Err() != nil {
+				status = "cancelled"
+			} else {
+				status = "failed"
+			}
+		}
+
+		if _, upsertErr := e.graphClient.UpsertNode(context.Background(), graph.Node{
+			Type:       graph.NodeScanRun,
+			PrimaryKey: scanRunID,
+			Props: map[string]any{
+				"id":            scanRunID,
+				"target":        target,
+				"domains":       domains,
+				"domain_count":  len(domains),
+				"status":        status,
+				"started_at":    startedAt.Format(time.RFC3339),
+				"completed_at":  time.Now().UTC().Format(time.RFC3339),
+				"duration_ms":   time.Since(startedAt).Milliseconds(),
+				"error_message": errorString(err),
+			},
+		}); upsertErr != nil {
+			e.logger.Warn("failed to persist scan run completion", "scan_run_id", scanRunID, "error", upsertErr)
+		}
+
+		if status == "completed" && strings.TrimSpace(e.cfg.Scan.OutputDir) != "" {
+			if writeErr := writeDeltaSummary(e.cfg.Scan.OutputDir, e.metrics.Summary(scanRunID, startedAt)); writeErr != nil {
+				e.logger.Warn("failed to write delta summary", "scan_run_id", scanRunID, "error", writeErr)
+			}
+		}
+	}()
+
 	e.logger.Info("starting scan",
 		"scan_run_id", scanRunID,
 		"domains", domains,
@@ -77,6 +132,7 @@ func (e *Engine) Run(ctx context.Context, domains []string) error {
 		if err := e.graphClient.SeedDomain(ctx, domain, scanRunID); err != nil {
 			return fmt.Errorf("seed domain %q: %w", domain, err)
 		}
+		e.metrics.AddNode(graph.NodeDomain, domain, true)
 		e.logger.Info("seeded domain", "fqdn", domain)
 	}
 
@@ -86,9 +142,9 @@ func (e *Engine) Run(ctx context.Context, domains []string) error {
 			return ctx.Err()
 		}
 
-		dispatched, err := e.runIteration(ctx, iteration, scanRunID)
-		if err != nil {
-			return fmt.Errorf("iteration %d: %w", iteration, err)
+		dispatched, iterErr := e.runIteration(ctx, iteration, scanRunID)
+		if iterErr != nil {
+			return fmt.Errorf("iteration %d: %w", iteration, iterErr)
 		}
 
 		e.logger.Info("iteration complete",
@@ -108,6 +164,13 @@ func (e *Engine) Run(ctx context.Context, domains []string) error {
 
 	e.logger.Info("scan complete", "scan_run_id", scanRunID)
 	return nil
+}
+
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 // runIteration runs a single pass over all enrichers, dispatching jobs for
@@ -206,6 +269,8 @@ func (e *Engine) runIteration(ctx context.Context, iteration int, scanRunID stri
 						"node", node.PrimaryKey,
 						"error", err,
 					)
+				} else {
+					e.metrics.AddFinding(findingID, "info")
 				}
 				if err := e.graphClient.MarkEnriched(ctx, node.Type, node.PrimaryKey, enricher.Name); err != nil {
 					e.logger.Warn("failed to mark over-budget node enriched",
@@ -414,6 +479,8 @@ func (e *Engine) dispatchJob(ctx context.Context, enricher config.EnricherDef, w
 				LastSeen:  time.Now().UTC(),
 			}, node.Type, node.PrimaryKey); err != nil {
 				log.Error("upsert depth budget finding failed", "node_type", n.Type, "key", n.PrimaryKey, "error", err)
+			} else {
+				e.metrics.AddFinding(findingID, "info")
 			}
 			continue
 		}
@@ -425,10 +492,11 @@ func (e *Engine) dispatchJob(ctx context.Context, enricher config.EnricherDef, w
 			log.Error("upsert node failed", "node_type", n.Type, "key", n.PrimaryKey, "error", err)
 			continue
 		}
+		e.metrics.AddNode(n.Type, n.PrimaryKey, inScope)
 
 		// Out-of-scope nodes get a finding but no further enrichment.
 		if !inScope {
-			e.graphClient.UpsertFinding(ctx, graph.Finding{
+			if err := e.graphClient.UpsertFinding(ctx, graph.Finding{
 				ID:         fmt.Sprintf("oos-%s-%s", n.Type, n.PrimaryKey),
 				Type:       "out-of-scope-asset",
 				Title:      fmt.Sprintf("Out-of-scope %s: %s", n.Type, n.PrimaryKey),
@@ -437,7 +505,9 @@ func (e *Engine) dispatchJob(ctx context.Context, enricher config.EnricherDef, w
 				Tool:       enricher.Name,
 				FirstSeen:  time.Now().UTC(),
 				LastSeen:   time.Now().UTC(),
-			}, n.Type, n.PrimaryKey)
+			}, n.Type, n.PrimaryKey); err == nil {
+				e.metrics.AddFinding(fmt.Sprintf("oos-%s-%s", n.Type, n.PrimaryKey), "info")
+			}
 		}
 	}
 
@@ -456,6 +526,8 @@ func (e *Engine) dispatchJob(ctx context.Context, enricher config.EnricherDef, w
 	for _, finding := range parseResult.Findings {
 		if err := e.graphClient.UpsertFinding(ctx, finding, node.Type, node.PrimaryKey); err != nil {
 			log.Error("upsert finding failed", "finding_type", finding.Type, "error", err)
+		} else {
+			e.metrics.AddFinding(finding.ID, finding.Severity)
 		}
 	}
 
