@@ -39,6 +39,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/api/summary", s.handleSummary)
 	mux.HandleFunc("/api/jsfiles", s.handleJSFiles)
+	mux.HandleFunc("/api/scan-runs", s.handleScanRuns)
+	mux.HandleFunc("/api/data/urls", s.handleURLs)
+	mux.HandleFunc("/api/data/services", s.handleServices)
 	mux.HandleFunc("/api/top-findings", s.handleTopFindings)
 	mux.HandleFunc("/api/jsrecon/monitor", s.handleMonitorAdd)
 	mux.HandleFunc("/api/jsrecon/monitor/check", s.handleMonitorCheck)
@@ -105,6 +108,54 @@ func (s *Server) handleTopFindings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": findings, "count": len(findings)})
+}
+
+func (s *Server) handleScanRuns(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	limit := 50
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if n, err := parseInt(raw); err == nil && n > 0 && n <= 500 {
+			limit = n
+		}
+	}
+	items, err := s.graphClient.ListScanRuns(ctx, limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
+}
+
+func (s *Server) handleURLs(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	limit := 100
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if n, err := parseInt(raw); err == nil && n > 0 && n <= 2000 {
+			limit = n
+		}
+	}
+	items, err := s.graphClient.ListURLs(ctx, limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
+}
+
+func (s *Server) handleServices(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	limit := 100
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if n, err := parseInt(raw); err == nil && n > 0 && n <= 2000 {
+			limit = n
+		}
+	}
+	items, err := s.graphClient.ListServices(ctx, limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
 }
 
 type monitorRequest struct {

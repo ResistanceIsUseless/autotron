@@ -23,6 +23,30 @@ type JSFileAsset struct {
 	EndpointHint int64  `json:"endpoint_hint"`
 }
 
+type ScanRunView struct {
+	ID          string `json:"id"`
+	Target      string `json:"target"`
+	StartedAt   string `json:"started_at"`
+	CompletedAt string `json:"completed_at"`
+	Status      string `json:"status"`
+}
+
+type URLView struct {
+	URL        string `json:"url"`
+	Host       string `json:"host"`
+	StatusCode int64  `json:"status_code"`
+	Title      string `json:"title"`
+	LastSeen   string `json:"last_seen"`
+}
+
+type ServiceView struct {
+	IP       string `json:"ip"`
+	Port     int64  `json:"port"`
+	Product  string `json:"product"`
+	TLS      bool   `json:"tls"`
+	LastSeen string `json:"last_seen"`
+}
+
 func (c *Client) NodeCounts(ctx context.Context) ([]NodeCount, error) {
 	session := c.driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeRead})
 	defer session.Close(ctx)
@@ -116,6 +140,132 @@ LIMIT $limit`
 	}
 	if err := result.Err(); err != nil {
 		return nil, fmt.Errorf("query js files: %w", err)
+	}
+
+	return out, nil
+}
+
+func (c *Client) ListScanRuns(ctx context.Context, limit int) ([]ScanRunView, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+
+	session := c.driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeRead})
+	defer session.Close(ctx)
+
+	query := `
+MATCH (r:ScanRun)
+RETURN
+  coalesce(r.id, '') AS id,
+  coalesce(r.target, '') AS target,
+  coalesce(r.started_at, '') AS started_at,
+  coalesce(r.completed_at, '') AS completed_at,
+  coalesce(r.status, '') AS status
+ORDER BY started_at DESC
+LIMIT $limit`
+
+	result, err := session.Run(ctx, query, map[string]any{"limit": limit})
+	if err != nil {
+		return nil, fmt.Errorf("query scan runs: %w", err)
+	}
+
+	var out []ScanRunView
+	for result.Next(ctx) {
+		rec := result.Record()
+		out = append(out, ScanRunView{
+			ID:          fmt.Sprintf("%v", recordValue(rec, "id")),
+			Target:      fmt.Sprintf("%v", recordValue(rec, "target")),
+			StartedAt:   fmt.Sprintf("%v", recordValue(rec, "started_at")),
+			CompletedAt: fmt.Sprintf("%v", recordValue(rec, "completed_at")),
+			Status:      fmt.Sprintf("%v", recordValue(rec, "status")),
+		})
+	}
+	if err := result.Err(); err != nil {
+		return nil, fmt.Errorf("query scan runs: %w", err)
+	}
+
+	return out, nil
+}
+
+func (c *Client) ListURLs(ctx context.Context, limit int) ([]URLView, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+
+	session := c.driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeRead})
+	defer session.Close(ctx)
+
+	query := `
+MATCH (u:URL)
+RETURN
+  coalesce(u.url, '') AS url,
+  coalesce(u.host, '') AS host,
+  toInteger(coalesce(u.status_code, 0)) AS status_code,
+  coalesce(u.title, '') AS title,
+  coalesce(u.last_seen, '') AS last_seen
+ORDER BY last_seen DESC
+LIMIT $limit`
+
+	result, err := session.Run(ctx, query, map[string]any{"limit": limit})
+	if err != nil {
+		return nil, fmt.Errorf("query urls: %w", err)
+	}
+
+	var out []URLView
+	for result.Next(ctx) {
+		rec := result.Record()
+		out = append(out, URLView{
+			URL:        fmt.Sprintf("%v", recordValue(rec, "url")),
+			Host:       fmt.Sprintf("%v", recordValue(rec, "host")),
+			StatusCode: toInt64(recordValue(rec, "status_code")),
+			Title:      fmt.Sprintf("%v", recordValue(rec, "title")),
+			LastSeen:   fmt.Sprintf("%v", recordValue(rec, "last_seen")),
+		})
+	}
+	if err := result.Err(); err != nil {
+		return nil, fmt.Errorf("query urls: %w", err)
+	}
+
+	return out, nil
+}
+
+func (c *Client) ListServices(ctx context.Context, limit int) ([]ServiceView, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+
+	session := c.driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeRead})
+	defer session.Close(ctx)
+
+	query := `
+MATCH (s:Service)
+RETURN
+  coalesce(s.ip, '') AS ip,
+  toInteger(coalesce(s.port, 0)) AS port,
+  coalesce(s.product, '') AS product,
+  coalesce(s.tls, false) AS tls,
+  coalesce(s.last_seen, '') AS last_seen
+ORDER BY last_seen DESC
+LIMIT $limit`
+
+	result, err := session.Run(ctx, query, map[string]any{"limit": limit})
+	if err != nil {
+		return nil, fmt.Errorf("query services: %w", err)
+	}
+
+	var out []ServiceView
+	for result.Next(ctx) {
+		rec := result.Record()
+		out = append(out, ServiceView{
+			IP:       fmt.Sprintf("%v", recordValue(rec, "ip")),
+			Port:     toInt64(recordValue(rec, "port")),
+			Product:  fmt.Sprintf("%v", recordValue(rec, "product")),
+			TLS:      toBool(recordValue(rec, "tls")),
+			LastSeen: fmt.Sprintf("%v", recordValue(rec, "last_seen")),
+		})
+	}
+	if err := result.Err(); err != nil {
+		return nil, fmt.Errorf("query services: %w", err)
 	}
 
 	return out, nil

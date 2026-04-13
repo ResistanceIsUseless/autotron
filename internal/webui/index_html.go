@@ -90,6 +90,30 @@ const indexHTML = `<!doctype html>
     </div>
 
     <div class="card" style="margin-top: 14px;">
+      <strong>Recent Scan Runs</strong>
+      <table style="margin-top:8px;">
+        <thead><tr><th>ID</th><th>Target</th><th>Status</th><th>Started</th><th>Completed</th></tr></thead>
+        <tbody id="scanRows"></tbody>
+      </table>
+    </div>
+
+    <div class="card" style="margin-top: 14px;">
+      <strong>Recent URLs</strong>
+      <table style="margin-top:8px;">
+        <thead><tr><th>URL</th><th>Host</th><th>Status</th><th>Title</th><th>Last Seen</th></tr></thead>
+        <tbody id="urlRows"></tbody>
+      </table>
+    </div>
+
+    <div class="card" style="margin-top: 14px;">
+      <strong>Recent Services</strong>
+      <table style="margin-top:8px;">
+        <thead><tr><th>IP</th><th>Port</th><th>Product</th><th>TLS</th><th>Last Seen</th></tr></thead>
+        <tbody id="serviceRows"></tbody>
+      </table>
+    </div>
+
+    <div class="card" style="margin-top: 14px;">
       <strong>Monitored URLs</strong>
       <table style="margin-top:8px;">
         <thead><tr><th>Label</th><th>URL</th><th>Status</th><th>Errors</th><th>Last Checked</th></tr></thead>
@@ -308,6 +332,30 @@ const indexHTML = `<!doctype html>
       document.getElementById('changeMeta').textContent = 'offset=' + changePage.offset + ' limit=' + limit + ' count=' + items.length + ' has_more=' + changePage.has_more;
     }
 
+    async function loadScanRuns() {
+      const data = await j('/api/scan-runs?limit=25');
+      const rows = document.getElementById('scanRows');
+      rows.innerHTML = (data.items || []).map(r =>
+        '<tr><td class="tiny">' + esc(r.id) + '</td><td>' + esc(r.target || '') + '</td><td>' + esc(r.status || '') + '</td><td class="tiny">' + esc(r.started_at || '') + '</td><td class="tiny">' + esc(r.completed_at || '') + '</td></tr>'
+      ).join('');
+    }
+
+    async function loadURLs() {
+      const data = await j('/api/data/urls?limit=25');
+      const rows = document.getElementById('urlRows');
+      rows.innerHTML = (data.items || []).map(u =>
+        '<tr><td class="tiny"><a href="' + esc(u.url) + '" target="_blank" rel="noreferrer">' + esc(u.url) + '</a></td><td class="tiny">' + esc(u.host || '') + '</td><td>' + esc(u.status_code || 0) + '</td><td class="tiny">' + esc(u.title || '') + '</td><td class="tiny">' + esc(u.last_seen || '') + '</td></tr>'
+      ).join('');
+    }
+
+    async function loadServices() {
+      const data = await j('/api/data/services?limit=25');
+      const rows = document.getElementById('serviceRows');
+      rows.innerHTML = (data.items || []).map(s =>
+        '<tr><td>' + esc(s.ip || '') + '</td><td>' + esc(s.port || 0) + '</td><td>' + esc(s.product || '') + '</td><td>' + esc(s.tls ? 'yes' : 'no') + '</td><td class="tiny">' + esc(s.last_seen || '') + '</td></tr>'
+      ).join('');
+    }
+
     function applyChangeFilters() {
       changePage.offset = 0;
       loadChanges();
@@ -333,7 +381,7 @@ const indexHTML = `<!doctype html>
     }
 
     async function refreshAll() {
-      await Promise.all([loadSummary(), loadHealth(), loadMonitorList(), loadJSFiles(), loadFindings(), loadChanges()]);
+      await Promise.all([loadSummary(), loadHealth(), loadScanRuns(), loadURLs(), loadServices(), loadMonitorList(), loadJSFiles(), loadFindings(), loadChanges()]);
     }
 
     refreshAll();
