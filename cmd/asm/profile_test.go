@@ -29,3 +29,26 @@ func TestEnableEnrichersInYAML(t *testing.T) {
 		t.Fatal("expected b_two to remain disabled")
 	}
 }
+
+func TestSetEnrichersEnabledInYAMLDisable(t *testing.T) {
+	raw := `enrichers:
+  - name: one
+    enabled: true
+  - name: two
+    enabled: true
+`
+
+	updated, changed, err := setEnrichersEnabledInYAML(raw, []string{"one"}, false)
+	if err != nil {
+		t.Fatalf("setEnrichersEnabledInYAML disable failed: %v", err)
+	}
+	if changed != 1 {
+		t.Fatalf("expected 1 change, got %d", changed)
+	}
+	if !strings.Contains(updated, "name: one\n    enabled: false") {
+		t.Fatal("expected one to be disabled")
+	}
+	if !strings.Contains(updated, "name: two\n    enabled: true") {
+		t.Fatal("expected two to remain enabled")
+	}
+}

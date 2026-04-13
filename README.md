@@ -186,6 +186,9 @@ asm profile --name passive-plus
 
 # apply profile changes to configs/enrichers.yaml
 asm profile --name passive-plus --apply
+
+# disable a profile set
+asm profile --name passive-plus --apply --disable
 ```
 
 ## Build

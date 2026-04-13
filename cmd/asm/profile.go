@@ -34,10 +34,11 @@ func profileCmd() *cobra.Command {
 	var name string
 	var apply bool
 	var list bool
+	var disable bool
 
 	cmd := &cobra.Command{
 		Use:   "profile",
-		Short: "Preview or apply enricher enablement profiles",
+		Short: "Preview or apply enricher profile changes",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if list || strings.TrimSpace(name) == "" {
 				fmt.Println("Available profiles:")
@@ -49,7 +50,7 @@ func profileCmd() *cobra.Command {
 				for _, n := range names {
 					fmt.Printf("- %s (%d enrichers)\n", n, len(profileGroups[n]))
 				}
-				fmt.Println("\nUse: asm profile --name <profile> [--apply]")
+				fmt.Println("\nUse: asm profile --name <profile> [--apply] [--disable]")
 				return nil
 			}
 
@@ -71,30 +72,37 @@ func profileCmd() *cobra.Command {
 
 			fmt.Printf("Profile: %s\n", groupName)
 			missing := make([]string, 0)
-			toEnable := make([]string, 0)
-			already := make([]string, 0)
+			toChange := make([]string, 0)
+			alreadyDesired := make([]string, 0)
 			for _, n := range target {
 				curr, ok := enabledByName[n]
 				if !ok {
 					missing = append(missing, n)
 					continue
 				}
-				if curr {
-					already = append(already, n)
+				if curr == !disable {
+					alreadyDesired = append(alreadyDesired, n)
 				} else {
-					toEnable = append(toEnable, n)
+					toChange = append(toChange, n)
 				}
 			}
 
-			if len(toEnable) > 0 {
-				fmt.Println("Will enable:")
-				for _, n := range toEnable {
+			action := "enable"
+			alreadyLabel := "Already enabled:"
+			if disable {
+				action = "disable"
+				alreadyLabel = "Already disabled:"
+			}
+
+			if len(toChange) > 0 {
+				fmt.Printf("Will %s:\n", action)
+				for _, n := range toChange {
 					fmt.Printf("  - %s\n", n)
 				}
 			}
-			if len(already) > 0 {
-				fmt.Println("Already enabled:")
-				for _, n := range already {
+			if len(alreadyDesired) > 0 {
+				fmt.Println(alreadyLabel)
+				for _, n := range alreadyDesired {
 					fmt.Printf("  - %s\n", n)
 				}
 			}
@@ -115,7 +123,7 @@ func profileCmd() *cobra.Command {
 				return fmt.Errorf("read enrichers file: %w", err)
 			}
 
-			updated, changed, err := enableEnrichersInYAML(string(raw), toEnable)
+			updated, changed, err := setEnrichersEnabledInYAML(string(raw), toChange, !disable)
 			if err != nil {
 				return err
 			}
@@ -127,7 +135,7 @@ func profileCmd() *cobra.Command {
 			if err := os.WriteFile(enrichersFile, []byte(updated), 0o644); err != nil {
 				return fmt.Errorf("write enrichers file: %w", err)
 			}
-			fmt.Printf("Applied profile %s: enabled %d enricher(s).\n", groupName, changed)
+			fmt.Printf("Applied profile %s: %s %d enricher(s).\n", groupName, action+"d", changed)
 			fmt.Println("Next: go run ./cmd/asm validate")
 			return nil
 		},
@@ -135,11 +143,16 @@ func profileCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&name, "name", "", "profile name (passive-plus|auth-api|advanced-web)")
 	cmd.Flags().BoolVar(&apply, "apply", false, "apply changes to enrichers config")
+	cmd.Flags().BoolVar(&disable, "disable", false, "disable profile enrichers instead of enabling")
 	cmd.Flags().BoolVar(&list, "list", false, "list available profiles")
 	return cmd
 }
 
 func enableEnrichersInYAML(raw string, names []string) (string, int, error) {
+	return setEnrichersEnabledInYAML(raw, names, true)
+}
+
+func setEnrichersEnabledInYAML(raw string, names []string, enabled bool) (string, int, error) {
 	if len(names) == 0 {
 		return raw, 0, nil
 	}
@@ -168,11 +181,15 @@ func enableEnrichersInYAML(raw string, names []string) (string, int, error) {
 		if len(m) != 4 {
 			continue
 		}
-		if m[2] == "true" {
+		targetEnabled := "false"
+		if enabled {
+			targetEnabled = "true"
+		}
+		if m[2] == targetEnabled {
 			current = ""
 			continue
 		}
-		lines[i] = m[1] + "true" + m[3]
+		lines[i] = m[1] + targetEnabled + m[3]
 		changed++
 		current = ""
 	}
