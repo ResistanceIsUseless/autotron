@@ -130,9 +130,21 @@ func TestDeltaReportJSONParser_Basic(t *testing.T) {
 }
 
 func TestBacklogParsersRegistered(t *testing.T) {
-	for _, name := range []string{"search_dork_json", "exposure_passive_json", "cloud_bucket_json", "repo_leak_json", "api_surface_json", "auth_surface_json", "http_advanced_vuln_json", "mail_posture_json", "mobile_artifact_json", "delta_report_json", "visual_cluster_json"} {
+	for _, name := range []string{"search_dork_json", "url_shortener_json", "exposure_passive_json", "cloud_bucket_json", "repo_leak_json", "api_surface_json", "auth_surface_json", "http_advanced_vuln_json", "mail_posture_json", "mobile_artifact_json", "delta_report_json", "visual_cluster_json"} {
 		if _, err := Get(name); err != nil {
 			t.Fatalf("expected parser %s to be registered: %v", name, err)
 		}
+	}
+}
+
+func TestHTTPAdvancedVulnJSONParser_CSRFBasic(t *testing.T) {
+	p := &httpAdvancedVulnJSONParser{}
+	trigger := graph.Node{Type: graph.NodeURL, PrimaryKey: "https://api.example.com/profile", Props: map[string]any{"url": "https://api.example.com/profile"}}
+	out, err := p.Parse(context.Background(), trigger, strings.NewReader(`{"url":"https://api.example.com/profile","type":"csrf-policy-gap","severity":"medium","confidence":"firm","signal":"missing token","details":"no csrf marker"}`), strings.NewReader(""))
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if len(out.Findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(out.Findings))
 	}
 }

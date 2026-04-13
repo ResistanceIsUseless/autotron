@@ -68,3 +68,8 @@ go run ./cmd/asm scan -d example.com
 - Keep `concurrency` low (1-2) for dorking enrichers.
 - Keep per-domain max results conservative (for quota + noise control).
 - Keep this enricher passive-only.
+
+## Related docs
+
+- `docs/yandex-dorking-setup.md`
+- `docs/url-shortener-intel-setup.md`

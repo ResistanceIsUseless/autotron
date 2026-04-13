@@ -28,6 +28,9 @@ type config struct {
 	fofaEmail     string
 	fofaKey       string
 	fofaBaseURL   string
+	censysID      string
+	censysSecret  string
+	censysBaseURL string
 }
 
 type outputRecord struct {
@@ -72,6 +75,26 @@ type fofaSearchResponse struct {
 	Fields  []string `json:"fields"`
 }
 
+type censysHostResponse struct {
+	Result struct {
+		IP       string `json:"ip"`
+		Services []struct {
+			Port              int              `json:"port"`
+			ServiceName       string           `json:"service_name"`
+			TransportProtocol string           `json:"transport_protocol"`
+			Banner            string           `json:"banner"`
+			Software          []censysSoftware `json:"software"`
+			ObservedAt        string           `json:"observed_at"`
+		} `json:"services"`
+	} `json:"result"`
+	Error string `json:"error"`
+}
+
+type censysSoftware struct {
+	Product string `json:"product"`
+	Version string `json:"version"`
+}
+
 func main() {
 	cfg := parseFlags()
 	if err := run(cfg); err != nil {
@@ -82,7 +105,7 @@ func main() {
 
 func parseFlags() config {
 	var cfg config
-	flag.StringVar(&cfg.provider, "provider", "shodan", "provider to query (shodan|fofa)")
+	flag.StringVar(&cfg.provider, "provider", "shodan", "provider to query (shodan|fofa|censys)")
 	flag.StringVar(&cfg.ip, "ip", "", "target IP address")
 	flag.BoolVar(&cfg.jsonOutput, "json", false, "emit JSONL records")
 	flag.DurationVar(&cfg.timeout, "timeout", 20*time.Second, "HTTP timeout per request")
@@ -92,6 +115,9 @@ func parseFlags() config {
 	flag.StringVar(&cfg.fofaEmail, "fofa-email", "", "FOFA account email (or FOFA_EMAIL)")
 	flag.StringVar(&cfg.fofaKey, "fofa-key", "", "FOFA API key (or FOFA_KEY)")
 	flag.StringVar(&cfg.fofaBaseURL, "fofa-base-url", "https://fofa.info", "FOFA API base URL")
+	flag.StringVar(&cfg.censysID, "censys-id", "", "Censys API ID (or CENSYS_API_ID)")
+	flag.StringVar(&cfg.censysSecret, "censys-secret", "", "Censys API secret (or CENSYS_API_SECRET)")
+	flag.StringVar(&cfg.censysBaseURL, "censys-base-url", "https://search.censys.io", "Censys API base URL")
 	flag.Parse()
 	return cfg
 }
@@ -111,8 +137,8 @@ func run(cfg config) error {
 	}
 
 	provider := strings.ToLower(strings.TrimSpace(cfg.provider))
-	if provider != "shodan" && provider != "fofa" {
-		return fmt.Errorf("unsupported --provider %q (supported: shodan|fofa)", cfg.provider)
+	if provider != "shodan" && provider != "fofa" && provider != "censys" {
+		return fmt.Errorf("unsupported --provider %q (supported: shodan|fofa|censys)", cfg.provider)
 	}
 
 	shodanKey := strings.TrimSpace(cfg.shodanKey)
@@ -127,12 +153,23 @@ func run(cfg config) error {
 	if fofaKey == "" {
 		fofaKey = strings.TrimSpace(os.Getenv("FOFA_KEY"))
 	}
+	censysID := strings.TrimSpace(cfg.censysID)
+	if censysID == "" {
+		censysID = strings.TrimSpace(os.Getenv("CENSYS_API_ID"))
+	}
+	censysSecret := strings.TrimSpace(cfg.censysSecret)
+	if censysSecret == "" {
+		censysSecret = strings.TrimSpace(os.Getenv("CENSYS_API_SECRET"))
+	}
 
 	if provider == "shodan" && shodanKey == "" {
 		return errors.New("missing Shodan API key (set SHODAN_API_KEY)")
 	}
 	if provider == "fofa" && (fofaEmail == "" || fofaKey == "") {
 		return errors.New("missing FOFA credentials (set FOFA_EMAIL and FOFA_KEY)")
+	}
+	if provider == "censys" && (censysID == "" || censysSecret == "") {
+		return errors.New("missing Censys credentials (set CENSYS_API_ID and CENSYS_API_SECRET)")
 	}
 
 	client := &http.Client{Timeout: cfg.timeout}
@@ -147,6 +184,8 @@ func run(cfg config) error {
 		records, err = shodanLookup(ctx, client, cfg.shodanBaseURL, shodanKey, cfg.ip, cfg.maxServices)
 	case "fofa":
 		records, err = fofaLookup(ctx, client, cfg.fofaBaseURL, fofaEmail, fofaKey, cfg.ip, cfg.maxServices)
+	case "censys":
+		records, err = censysLookup(ctx, client, cfg.censysBaseURL, censysID, censysSecret, cfg.ip, cfg.maxServices)
 	}
 	if err != nil {
 		return err
@@ -327,6 +366,101 @@ func fofaLookup(ctx context.Context, client *http.Client, baseURL, email, key, i
 	}
 
 	return out, nil
+}
+
+func censysLookup(ctx context.Context, client *http.Client, baseURL, id, secret, ip string, maxServices int) ([]outputRecord, error) {
+	baseURL = strings.TrimSpace(strings.TrimSuffix(baseURL, "/"))
+	if baseURL == "" {
+		baseURL = "https://search.censys.io"
+	}
+
+	u, err := url.Parse(baseURL + "/api/v2/hosts/" + url.PathEscape(ip))
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.SetBasicAuth(id, secret)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("censys api: %s", resp.Status)
+	}
+
+	var parsed censysHostResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("decode censys response: %w", err)
+	}
+	if msg := strings.TrimSpace(parsed.Error); msg != "" {
+		return nil, fmt.Errorf("censys api: %s", msg)
+	}
+
+	targetIP := strings.TrimSpace(parsed.Result.IP)
+	if targetIP == "" {
+		targetIP = ip
+	}
+
+	out := make([]outputRecord, 0, len(parsed.Result.Services))
+	for _, s := range parsed.Result.Services {
+		if s.Port <= 0 || s.Port > 65535 {
+			continue
+		}
+		service := strings.ToLower(strings.TrimSpace(s.ServiceName))
+		if service == "" {
+			if svc, ok := commonPortServices[s.Port]; ok {
+				service = svc
+			} else {
+				service = "unknown"
+			}
+		}
+		protocol := strings.ToLower(strings.TrimSpace(s.TransportProtocol))
+		if protocol == "" {
+			protocol = "tcp"
+		}
+
+		product, version := firstSoftware(s.Software)
+		rec := outputRecord{
+			Provider: "censys",
+			IP:       targetIP,
+			Port:     s.Port,
+			Protocol: protocol,
+			Service:  service,
+			Product:  product,
+			Version:  version,
+			Banner:   strings.TrimSpace(s.Banner),
+			Risk:     classifyRisk(nil, s.Port, service),
+		}
+		out = append(out, rec)
+		if len(out) >= maxServices {
+			break
+		}
+	}
+
+	return out, nil
+}
+
+func firstSoftware(sw []censysSoftware) (string, string) {
+	for _, s := range sw {
+		p := strings.TrimSpace(s.Product)
+		v := strings.TrimSpace(s.Version)
+		if p != "" || v != "" {
+			return p, v
+		}
+	}
+	return "", ""
 }
 
 func classifyService(b shodanBanner) string {

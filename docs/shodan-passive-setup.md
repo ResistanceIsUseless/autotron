@@ -54,3 +54,8 @@ go run ./cmd/asm scan -d example.com
 
 - Keep this enricher passive-only.
 - Keep concurrency moderate (2-4) and avoid broad unscoped IP expansion.
+
+## Related provider docs
+
+- `docs/fofa-passive-setup.md`
+- `docs/censys-passive-setup.md`

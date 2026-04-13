@@ -1,6 +1,27 @@
 package main
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
+
+func TestNormalizeCheck(t *testing.T) {
+	if normalizeCheck("all") != "all" {
+		t.Fatal("expected all")
+	}
+	if normalizeCheck("spf-dkim-dmarc") != "spf-dkim-dmarc" {
+		t.Fatal("expected spf-dkim-dmarc")
+	}
+	if normalizeCheck("bad") != "" {
+		t.Fatal("expected unsupported check to normalize empty")
+	}
+}
+
+func TestHasAnyDKIMNoSelectors(t *testing.T) {
+	if hasAnyDKIM(testBackground(), "example.com", nil) {
+		t.Fatal("expected false with no selectors")
+	}
+}
 
 func TestExtractDMARCPolicy(t *testing.T) {
 	if got := extractDMARCPolicy("v=DMARC1; p=none; rua=mailto:test@example.com"); got != "none" {
@@ -24,3 +45,5 @@ func TestShorten(t *testing.T) {
 		t.Fatalf("expected len 10, got %d (%s)", len(got), got)
 	}
 }
+
+func testBackground() context.Context { return context.Background() }

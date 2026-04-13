@@ -1,12 +1,12 @@
 # Mail Posture Setup
 
-Autotron's `mx_posture_audit` enricher uses the `mail-posture` helper to run passive DNS posture checks.
+Autotron's `mx_posture_audit`, `spf_dkim_dmarc_audit`, and `smtp_open_relay_probe` enrichers use `mail-posture`.
 
 ## What it checks
 
-- MX presence.
-- SPF TXT presence and risky patterns (`+all`, missing `-all`).
-- DMARC presence and policy strength (`p=none` vs quarantine/reject).
+- MX posture (`--check mx`).
+- SPF/DKIM/DMARC posture (`--check spf-dkim-dmarc`).
+- SMTP relay heuristic probe against MX hosts (`--check smtp-relay`).
 
 ## Build helper
 
@@ -17,7 +17,9 @@ go build -o mail-posture ./cmd/mail-posture
 ## Smoke test
 
 ```bash
-./mail-posture --domain example.com --json
+./mail-posture --domain example.com --check mx --json
+./mail-posture --domain example.com --check spf-dkim-dmarc --json
+./mail-posture --domain example.com --check smtp-relay --timeout 15s --json
 ```
 
 Output fields:
@@ -28,6 +30,8 @@ Output fields:
 In `configs/enrichers.yaml` set:
 
 - `name: mx_posture_audit`
+- `name: spf_dkim_dmarc_audit`
+- `name: smtp_open_relay_probe`
 - `enabled: true`
 
 Then run:

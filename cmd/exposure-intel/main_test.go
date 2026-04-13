@@ -5,6 +5,13 @@ import (
 	"testing"
 )
 
+func TestFirstSoftware(t *testing.T) {
+	p, v := firstSoftware([]censysSoftware{{Product: "nginx", Version: "1.25.0"}})
+	if p != "nginx" || v != "1.25.0" {
+		t.Fatalf("expected first software tuple, got %s %s", p, v)
+	}
+}
+
 func TestClassifyServiceByPortFallback(t *testing.T) {
 	svc := classifyService(shodanBanner{Port: 443})
 	if svc != "https" {

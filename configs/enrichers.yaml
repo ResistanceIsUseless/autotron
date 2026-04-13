@@ -927,6 +927,28 @@ enrichers:
     concurrency: 2
     enabled: false
 
+  - name: url_shortener_search_passive
+    parser: url_shortener_json
+    subscribes:
+      node_type: Domain
+      predicate: "n.in_scope = true"
+    command:
+      bin: url-shortener-intel
+      args:
+        - "--engine"
+        - "google"
+        - "--domain"
+        - "{{.Node.fqdn}}"
+        - "--json"
+        - "--max-results"
+        - "40"
+        - "--max-redirects"
+        - "6"
+      timeout: 10m
+      retries: 1
+    concurrency: 2
+    enabled: false
+
   # --- Internet-wide passive exposure ---
 
   - name: shodan_host_passive
@@ -1269,7 +1291,7 @@ enrichers:
         - "--url"
         - "{{.Node.url}}"
         - "--check"
-        - "waf-diff"
+        - "csrf-audit"
         - "--json"
       timeout: 10m
       retries: 1
@@ -1277,7 +1299,7 @@ enrichers:
     enabled: false
 
   - name: idor_candidate_mapper
-    parser: web_vuln_generic
+    parser: http_advanced_vuln_json
     subscribes:
       node_type: Endpoint
       predicate: "n.in_scope = true"
@@ -1287,15 +1309,17 @@ enrichers:
         - "--url"
         - "{{.Node.url}}{{.Node.path}}"
         - "--check"
-        - "cache-poison"
+        - "idor-map"
         - "--json"
+        - "--idor-path"
+        - "{{.Node.path}}"
       timeout: 10m
       retries: 1
     concurrency: 2
     enabled: false
 
   - name: csrf_policy_audit
-    parser: web_vuln_generic
+    parser: http_advanced_vuln_json
     subscribes:
       node_type: Endpoint
       predicate: "n.in_scope = true"
@@ -1305,7 +1329,7 @@ enrichers:
         - "--url"
         - "{{.Node.url}}{{.Node.path}}"
         - "--check"
-        - "desync"
+        - "csrf-audit"
         - "--json"
       timeout: 10m
       retries: 1
@@ -1324,7 +1348,47 @@ enrichers:
       args:
         - "--domain"
         - "{{.Node.fqdn}}"
+        - "--check"
+        - "mx"
         - "--json"
+      timeout: 5m
+      retries: 1
+    concurrency: 2
+    enabled: false
+
+  - name: spf_dkim_dmarc_audit
+    parser: mail_posture_json
+    subscribes:
+      node_type: Domain
+      predicate: "n.in_scope = true"
+    command:
+      bin: mail-posture
+      args:
+        - "--domain"
+        - "{{.Node.fqdn}}"
+        - "--check"
+        - "spf-dkim-dmarc"
+        - "--json"
+      timeout: 5m
+      retries: 1
+    concurrency: 2
+    enabled: false
+
+  - name: smtp_open_relay_probe
+    parser: mail_posture_json
+    subscribes:
+      node_type: Domain
+      predicate: "n.in_scope = true"
+    command:
+      bin: mail-posture
+      args:
+        - "--domain"
+        - "{{.Node.fqdn}}"
+        - "--check"
+        - "smtp-relay"
+        - "--json"
+        - "--timeout"
+        - "15s"
       timeout: 5m
       retries: 1
     concurrency: 2

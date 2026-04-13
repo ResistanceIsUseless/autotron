@@ -21,6 +21,7 @@ type config struct {
 	timeout     time.Duration
 	userAgent   string
 	maxBodyRead int64
+	idorPath    string
 }
 
 type outputRecord struct {
@@ -30,6 +31,11 @@ type outputRecord struct {
 	Confidence string `json:"confidence"`
 	Signal     string `json:"signal"`
 	Details    string `json:"details"`
+}
+
+type idorCandidate struct {
+	path       string
+	confidence string
 }
 
 func main() {
@@ -43,11 +49,12 @@ func main() {
 func parseFlags() config {
 	var cfg config
 	flag.StringVar(&cfg.targetURL, "url", "", "target URL")
-	flag.StringVar(&cfg.check, "check", "desync", "check to run: desync|cache-poison|waf-diff")
+	flag.StringVar(&cfg.check, "check", "desync", "check to run: desync|cache-poison|waf-diff|idor-map|csrf-audit")
 	flag.BoolVar(&cfg.jsonOutput, "json", false, "emit JSONL output")
 	flag.DurationVar(&cfg.timeout, "timeout", 15*time.Second, "HTTP request timeout")
 	flag.StringVar(&cfg.userAgent, "user-agent", "autotron-web-advanced/1.0", "HTTP User-Agent")
 	flag.Int64Var(&cfg.maxBodyRead, "max-body", 1<<20, "maximum response body bytes to read")
+	flag.StringVar(&cfg.idorPath, "idor-path", "", "optional endpoint path hint for idor-map/csrf-audit")
 	flag.Parse()
 	return cfg
 }
@@ -63,7 +70,7 @@ func run(cfg config) error {
 	}
 	check := normalizeCheck(cfg.check)
 	if check == "" {
-		return fmt.Errorf("unsupported --check %q (supported: desync|cache-poison|waf-diff)", cfg.check)
+		return fmt.Errorf("unsupported --check %q (supported: desync|cache-poison|waf-diff|idor-map|csrf-audit)", cfg.check)
 	}
 	if cfg.timeout <= 0 {
 		return errors.New("--timeout must be > 0")
@@ -83,6 +90,10 @@ func run(cfg config) error {
 		recs, err = checkCachePoison(ctx, client, target, cfg)
 	case "waf-diff":
 		recs, err = checkWAFDiff(ctx, client, target, cfg)
+	case "idor-map":
+		recs, err = checkIDORMap(ctx, client, target, cfg)
+	case "csrf-audit":
+		recs, err = checkCSRFAudit(ctx, client, target, cfg)
 	}
 	if err != nil {
 		return err
@@ -194,10 +205,12 @@ func checkWAFDiff(ctx context.Context, client *http.Client, target string, cfg c
 }
 
 type probeResult struct {
-	status int
-	server string
-	cache  string
-	body   string
+	status     int
+	server     string
+	cache      string
+	body       string
+	csrfHeader string
+	setCookie  string
 }
 
 func probeGET(ctx context.Context, client *http.Client, target string, cfg config, headers map[string]string) (probeResult, error) {
@@ -218,21 +231,184 @@ func probeGET(ctx context.Context, client *http.Client, target string, cfg confi
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, cfg.maxBodyRead))
 	return probeResult{
-		status: resp.StatusCode,
-		server: strings.TrimSpace(resp.Header.Get("Server")),
-		cache:  strings.TrimSpace(resp.Header.Get("X-Cache")),
-		body:   string(body),
+		status:     resp.StatusCode,
+		server:     strings.TrimSpace(resp.Header.Get("Server")),
+		cache:      strings.TrimSpace(resp.Header.Get("X-Cache")),
+		body:       string(body),
+		csrfHeader: strings.TrimSpace(resp.Header.Get("X-CSRF-Token")),
+		setCookie:  strings.TrimSpace(strings.Join(resp.Header.Values("Set-Cookie"), "; ")),
 	}, nil
 }
 
 func normalizeCheck(v string) string {
 	v = strings.ToLower(strings.TrimSpace(v))
 	switch v {
-	case "desync", "cache-poison", "waf-diff":
+	case "desync", "cache-poison", "waf-diff", "idor-map", "csrf-audit":
 		return v
 	default:
 		return ""
 	}
+}
+
+func checkIDORMap(ctx context.Context, client *http.Client, target string, cfg config) ([]outputRecord, error) {
+	u, err := url.Parse(target)
+	if err != nil {
+		return nil, err
+	}
+	path := strings.TrimSpace(u.Path)
+	if p := strings.TrimSpace(cfg.idorPath); p != "" {
+		path = p
+	}
+	candidates := idorCandidates(path)
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+
+	base, err := probeGET(ctx, client, target, cfg, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var out []outputRecord
+	for _, c := range candidates {
+		candURL := replacePath(target, c.path)
+		probe, err := probeGET(ctx, client, candURL, cfg, nil)
+		if err != nil {
+			continue
+		}
+		if statusDrift(base.status, probe.status) {
+			sev := "low"
+			if c.confidence == "firm" {
+				sev = "medium"
+			}
+			out = append(out, outputRecord{
+				URL:        candURL,
+				Type:       "idor-candidate",
+				Severity:   sev,
+				Confidence: c.confidence,
+				Signal:     fmt.Sprintf("status drift baseline=%d candidate=%d", base.status, probe.status),
+				Details:    "resource identifier variation changed authorization behavior",
+			})
+		}
+	}
+
+	return out, nil
+}
+
+func checkCSRFAudit(ctx context.Context, client *http.Client, target string, cfg config) ([]outputRecord, error) {
+	res, err := probeGET(ctx, client, target, cfg, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	body := strings.ToLower(res.body)
+	headers := strings.ToLower(strings.TrimSpace(res.csrfHeader + " " + res.setCookie))
+	hasToken := strings.Contains(body, "csrf") || strings.Contains(body, "xsrf") || strings.Contains(body, "authenticity_token")
+	hasToken = hasToken || strings.Contains(headers, "csrf") || strings.Contains(headers, "xsrf")
+	if hasToken {
+		return nil, nil
+	}
+
+	rec := outputRecord{
+		URL:        target,
+		Type:       "csrf-policy-gap",
+		Severity:   "low",
+		Confidence: "tentative",
+		Signal:     "no csrf/xsrf/authenticity token marker observed in body",
+		Details:    "state-changing surfaces may require anti-CSRF verification",
+	}
+
+	if looksStateChangingPath(target) {
+		rec.Severity = "medium"
+		rec.Confidence = "firm"
+		rec.Signal = "state-changing path with no CSRF marker"
+	}
+
+	return []outputRecord{rec}, nil
+}
+
+func idorCandidates(path string) []idorCandidate {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		path = "/"
+	}
+	segments := strings.Split(path, "/")
+	out := make([]idorCandidate, 0, 4)
+
+	for i := len(segments) - 1; i >= 0; i-- {
+		seg := strings.TrimSpace(segments[i])
+		if seg == "" {
+			continue
+		}
+		if isNumeric(seg) {
+			mut := append([]string(nil), segments...)
+			mut[i] = "1"
+			out = append(out, idorCandidate{path: strings.Join(mut, "/"), confidence: "firm"})
+			mut2 := append([]string(nil), segments...)
+			mut2[i] = "9999"
+			out = append(out, idorCandidate{path: strings.Join(mut2, "/"), confidence: "firm"})
+			break
+		}
+		if strings.Contains(strings.ToLower(seg), "me") {
+			mut := append([]string(nil), segments...)
+			mut[i] = "admin"
+			out = append(out, idorCandidate{path: strings.Join(mut, "/"), confidence: "tentative"})
+			break
+		}
+	}
+
+	return dedupeCandidates(out)
+}
+
+func dedupeCandidates(in []idorCandidate) []idorCandidate {
+	seen := make(map[string]bool)
+	out := make([]idorCandidate, 0, len(in))
+	for _, c := range in {
+		k := strings.TrimSpace(c.path)
+		if k == "" || seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, c)
+	}
+	return out
+}
+
+func replacePath(target, p string) string {
+	u, err := url.Parse(target)
+	if err != nil {
+		return target
+	}
+	u.Path = p
+	u.RawPath = ""
+	u.RawQuery = ""
+	return u.String()
+}
+
+func isNumeric(v string) bool {
+	if strings.TrimSpace(v) == "" {
+		return false
+	}
+	for _, r := range v {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func looksStateChangingPath(target string) bool {
+	u, err := url.Parse(target)
+	if err != nil {
+		return false
+	}
+	p := strings.ToLower(strings.TrimSpace(u.Path))
+	for _, key := range []string{"/update", "/delete", "/create", "/settings", "/profile", "/account", "/admin"} {
+		if strings.Contains(p, key) {
+			return true
+		}
+	}
+	return false
 }
 
 func appendQuery(target, key, val string) string {
