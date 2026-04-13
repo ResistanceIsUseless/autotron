@@ -93,6 +93,13 @@ Neo4j graph state after 2 interrupted runs (bash timeout, not tool failure):
 - [ ] Phase 2 planning (FindingSink, JSON export, LLM hooks, continuous monitoring)
 - [ ] Run full uninterrupted scan (outside of tool timeout — `nohup ./asm scan ... &`)
 
+## In Progress — ASM Web UI
+
+- [x] Added `asm webui` command to serve a lightweight UI (`--addr`, `--jsrecon` flags)
+- [x] Added backend endpoints for summary, JS assets, top findings, jsRecon health, and monitor-add
+- [x] Added minimal Go-served single-page UI for JS review + monitor workflow
+- [ ] Validate with live Neo4j + jsRecon server and refine UX
+
 ## How to Run
 
 ```bash
