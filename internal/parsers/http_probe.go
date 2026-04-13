@@ -144,8 +144,7 @@ func (p *httpProbeParser) processRecord(result *Result, rec httpxRecord, trigger
 			continue
 		}
 
-		// Technology key is "name:version" but httpx just gives names.
-		techKey := tech
+		techKey := technologyID(tech, "")
 		if seenTech[techKey] {
 			// Still create the RUNS edge even if node already seen.
 		} else {
@@ -154,6 +153,7 @@ func (p *httpProbeParser) processRecord(result *Result, rec httpxRecord, trigger
 				Type:       graph.NodeTechnology,
 				PrimaryKey: techKey,
 				Props: map[string]any{
+					"tech_id": techKey,
 					"name":    tech,
 					"version": "", // httpx doesn't provide version granularity
 				},

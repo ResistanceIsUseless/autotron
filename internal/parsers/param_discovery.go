@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"strings"
 
@@ -132,17 +131,18 @@ func (p *paramDiscoveryParser) addArjunResult(result *Result, rec arjunResult, t
 		}
 	}
 
-	key := fmt.Sprintf("%s|%s|/", targetURL, method)
+	key := endpointID(targetURL, method, "/")
 	if seen[key] {
 		return
 	}
 	seen[key] = true
 
 	props := map[string]any{
-		"url":    targetURL,
-		"method": method,
-		"path":   "/",
-		"source": "arjun",
+		"endpoint_id": key,
+		"url":         targetURL,
+		"method":      method,
+		"path":        "/",
+		"source":      "arjun",
 	}
 	if len(paramNames) > 0 {
 		props["params"] = paramNames
@@ -186,7 +186,7 @@ func (p *paramDiscoveryParser) parseLinkfinderText(lines []string, trigger graph
 		}
 
 		baseURL := trigger.PrimaryKey
-		key := fmt.Sprintf("%s|%s|%s", baseURL, method, path)
+		key := endpointID(baseURL, method, path)
 		if seen[key] {
 			continue
 		}
@@ -196,10 +196,11 @@ func (p *paramDiscoveryParser) parseLinkfinderText(lines []string, trigger graph
 			Type:       graph.NodeEndpoint,
 			PrimaryKey: key,
 			Props: map[string]any{
-				"url":    baseURL,
-				"method": method,
-				"path":   path,
-				"source": "linkfinder",
+				"endpoint_id": key,
+				"url":         baseURL,
+				"method":      method,
+				"path":        path,
+				"source":      "linkfinder",
 			},
 		})
 

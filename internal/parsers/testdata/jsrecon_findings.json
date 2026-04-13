@@ -1,0 +1,56 @@
+{
+  "findings": [
+    {
+      "type": "path",
+      "subtype": "rest_path",
+      "value": "/api/v1/users",
+      "line": 10,
+      "col": 5,
+      "confidence": 0.91,
+      "context": "fetch('/api/v1/users')",
+      "metadata": {
+        "source": "fetch"
+      }
+    },
+    {
+      "type": "secret",
+      "subtype": "github_token",
+      "value": "ghp_0123456789abcdefghijklmnopqrstuvwxyzAB",
+      "line": 22,
+      "col": 17,
+      "confidence": 0.97,
+      "context": "const token = 'ghp_...';",
+      "metadata": {
+        "entropy": 4.3,
+        "host": "api.campuscloud.io"
+      }
+    },
+    {
+      "type": "vulnerability",
+      "subtype": "xss_dom_sink",
+      "value": "el.innerHTML = location.hash",
+      "line": 30,
+      "col": 3,
+      "confidence": 0.68,
+      "context": "el.innerHTML = location.hash",
+      "metadata": {
+        "sink": "innerHTML",
+        "source": "location.hash",
+        "severity": "medium"
+      }
+    }
+  ],
+  "stats": {
+    "duration_ms": 12,
+    "source_type": "script",
+    "source_size_bytes": 1024,
+    "scope_variables_resolved": 8,
+    "strings_collected": 32,
+    "findings_by_type": {
+      "path": 1,
+      "secret": 1,
+      "vulnerability": 1
+    },
+    "total_findings": 3
+  }
+}

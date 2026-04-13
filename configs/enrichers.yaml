@@ -33,6 +33,7 @@ enrichers:
         - "--ct"
         - "--arin"
       timeout: 30m
+      retries: 1
     concurrency: 2
     enabled: true
 
@@ -48,6 +49,7 @@ enrichers:
         - "{{.Node.fqdn}}"
         - "-silent"
       timeout: 10m
+      retries: 1
     concurrency: 4
     enabled: true
 
@@ -68,6 +70,7 @@ enrichers:
         - "-resp"
       stdin: "{{.Node.fqdn}}"
       timeout: 5m
+      retries: 1
     concurrency: 32
     enabled: true
 
@@ -119,6 +122,7 @@ enrichers:
         - "1000"
         - "-Pn"
       timeout: 5m
+      retries: 1
     concurrency: 8
     enabled: true
 
@@ -142,6 +146,7 @@ enrichers:
         - "-"
         - "{{.Node.ip}}"
       timeout: 5m
+      retries: 1
     concurrency: 4
     enabled: true
 
@@ -163,6 +168,7 @@ enrichers:
         - "-"
         - "{{.Node.ip}}"
       timeout: 10m
+      retries: 1
     concurrency: 4
     enabled: true
 
@@ -184,6 +190,7 @@ enrichers:
         - "-"
         - "{{.Node.ip}}"
       timeout: 10m
+      retries: 1
     concurrency: 4
     enabled: true
 
@@ -205,6 +212,7 @@ enrichers:
         - "-"
         - "{{.Node.ip}}"
       timeout: 5m
+      retries: 1
     concurrency: 4
     enabled: true
 
@@ -228,6 +236,7 @@ enrichers:
         - "-hash"
         - "sha256"
       timeout: 2m
+      retries: 1
     concurrency: 8
     enabled: true
 
@@ -237,16 +246,20 @@ enrichers:
     parser: http_probe
     subscribes:
       node_type: Subdomain
+      match: "-[:RESOLVES_TO]->(i:IP)-[:HAS_SERVICE]->(svc:Service)"
+      returns:
+        - "i.address AS resolved_ip"
+        - "svc.port AS port"
+        - "svc.product AS service_product"
       predicate: >
-        n.in_scope = true AND EXISTS {
-          MATCH (n)-[:RESOLVES_TO]->(:IP)-[:HAS_SERVICE]->(svc:Service)
-          WHERE svc.product IN ['http', 'https']
-        }
+        n.in_scope = true AND svc.product IN ['http', 'https']
     command:
       bin: /Users/matthew/.pdtm/go/bin/httpx
       args:
         - "-u"
         - "{{.Node.fqdn}}"
+        - "-resolve"
+        - "{{.Node.fqdn}}:{{.Edge.port}}:{{.Edge.resolved_ip}}"
         - "-json"
         - "-tech-detect"
         - "-title"
@@ -254,6 +267,7 @@ enrichers:
         - "-content-length"
         - "-follow-redirects"
       timeout: 5m
+      retries: 1
     concurrency: 16
     enabled: true
 
@@ -273,6 +287,7 @@ enrichers:
         - "takeovers/"
         - "-jsonl"
       timeout: 5m
+      retries: 1
     concurrency: 4
     enabled: true
 
@@ -288,8 +303,10 @@ enrichers:
       args:
         - "-u"
         - "{{.Node.url}}"
-        - "-jsonl"
+        - "-of"
+        - "jsonl"
       timeout: 15m
+      retries: 1
     concurrency: 8
     enabled: true
 
@@ -307,6 +324,7 @@ enrichers:
         - "-d"
         - "3"
       timeout: 10m
+      retries: 1
     concurrency: 4
     enabled: true
 
@@ -322,6 +340,7 @@ enrichers:
         - "--threads"
         - "5"
       timeout: 10m
+      retries: 1
     concurrency: 4
     enabled: true
 
@@ -373,8 +392,9 @@ enrichers:
         - "{{.Node.url}}"
         - "-json"
       timeout: 5m
+      retries: 1
     concurrency: 4
-    enabled: true
+    enabled: false  # installed proxyhawk binary is proxy-list checker, not URL probe
 
   - name: trufflehog_exposed
     parser: secret_scanner
@@ -388,6 +408,7 @@ enrichers:
         - "--json"
         - "{{.Node.url}}"
       timeout: 10m
+      retries: 1
     concurrency: 2
     enabled: true
 
@@ -399,14 +420,18 @@ enrichers:
       node_type: JSFile
       predicate: ""
     command:
-      bin: jsrecon
+      bin: docker
       args:
-        - "-u"
+        - "run"
+        - "--rm"
+        - "autotron-jsrecon:latest"
+        - "analyze"
         - "{{.Node.url}}"
-        - "-json"
+        - "--json"
       timeout: 5m
+      retries: 1
     concurrency: 16
-    enabled: false  # jsrecon not installed
+    enabled: true
 
   # --- Nuclei (multiple invocations) ---
 
@@ -424,6 +449,7 @@ enrichers:
         - "-severity"
         - "low,medium,high,critical"
       timeout: 30m
+      retries: 1
     concurrency: 2
     enabled: true
 
@@ -441,6 +467,7 @@ enrichers:
         - "network/"
         - "-jsonl"
       timeout: 15m
+      retries: 1
     concurrency: 2
     enabled: true
 
@@ -807,4 +834,225 @@ enrichers:
       args: ["s_client", "-connect", "{{.Node.ip}}:{{.Node.port}}"]
       timeout: 30s
     concurrency: 8
+    enabled: false
+
+  # ===================================================================
+  # MISSING CHECKS BACKLOG — Phase 2+ (enabled: false)
+  # Newly planned enrichers for elite coverage. Parsers to be added.
+  # ===================================================================
+
+  # --- Search / dorking intelligence (passive) ---
+
+  - name: google_dork_passive
+    parser: search_dork_json
+    subscribes:
+      node_type: Domain
+      predicate: "n.in_scope = true"
+    command:
+      bin: dorkintel
+      args:
+        - "--engine"
+        - "google"
+        - "--domain"
+        - "{{.Node.fqdn}}"
+        - "--json"
+        - "--max-results"
+        - "30"
+        - "--delay"
+        - "750ms"
+      timeout: 10m
+      retries: 1
+    concurrency: 2
+    enabled: false
+
+  - name: bing_dork_passive
+    parser: search_dork_json
+    subscribes:
+      node_type: Domain
+      predicate: "n.in_scope = true"
+    command:
+      bin: dorkintel
+      args:
+        - "--engine"
+        - "bing"
+        - "--domain"
+        - "{{.Node.fqdn}}"
+        - "--json"
+        - "--max-results"
+        - "30"
+        - "--delay"
+        - "750ms"
+      timeout: 10m
+      retries: 1
+    concurrency: 2
+    enabled: false
+
+  # --- Internet-wide passive exposure ---
+
+  - name: shodan_host_passive
+    parser: exposure_passive_json
+    subscribes:
+      node_type: IP
+      predicate: "n.in_scope = true"
+    command:
+      bin: exposure-intel
+      args:
+        - "--provider"
+        - "shodan"
+        - "--ip"
+        - "{{.Node.address}}"
+        - "--json"
+        - "--max-services"
+        - "100"
+      timeout: 3m
+      retries: 1
+    concurrency: 4
+    enabled: false
+
+  - name: censys_host_passive
+    parser: exposure_passive_json
+    subscribes:
+      node_type: IP
+      predicate: "n.in_scope = true"
+    command:
+      bin: exposure-intel
+      args: ["--provider", "censys", "--ip", "{{.Node.address}}", "--json"]
+      timeout: 3m
+      retries: 1
+    concurrency: 4
+    enabled: false
+
+  # --- Cloud posture checks ---
+
+  - name: s3_bucket_enum
+    parser: cloud_bucket_json
+    subscribes:
+      node_type: Domain
+      predicate: "n.in_scope = true"
+    command:
+      bin: cloud-bucket-check
+      args: ["--provider", "aws", "--domain", "{{.Node.fqdn}}", "--json"]
+      timeout: 5m
+      retries: 1
+    concurrency: 2
+    enabled: false
+
+  - name: gcs_bucket_enum
+    parser: cloud_bucket_json
+    subscribes:
+      node_type: Domain
+      predicate: "n.in_scope = true"
+    command:
+      bin: cloud-bucket-check
+      args: ["--provider", "gcp", "--domain", "{{.Node.fqdn}}", "--json"]
+      timeout: 5m
+      retries: 1
+    concurrency: 2
+    enabled: false
+
+  # --- Repo leak intelligence ---
+
+  - name: github_code_search_passive
+    parser: repo_leak_json
+    subscribes:
+      node_type: Domain
+      predicate: "n.in_scope = true"
+    command:
+      bin: repo-intel
+      args:
+        - "--provider"
+        - "github"
+        - "--domain"
+        - "{{.Node.fqdn}}"
+        - "--json"
+        - "--max-results"
+        - "50"
+      timeout: 5m
+      retries: 1
+    concurrency: 2
+    enabled: false
+
+  # --- API surface security ---
+
+  - name: openapi_discovery
+    parser: api_surface_json
+    subscribes:
+      node_type: URL
+      predicate: "n.status_code = 200"
+    command:
+      bin: api-surface
+      args:
+        - "--url"
+        - "{{.Node.url}}"
+        - "--mode"
+        - "openapi"
+        - "--json"
+        - "--max-endpoints"
+        - "200"
+      timeout: 10m
+      retries: 1
+    concurrency: 4
+    enabled: false
+
+  - name: graphql_surface
+    parser: api_surface_json
+    subscribes:
+      node_type: URL
+      predicate: "n.status_code = 200"
+    command:
+      bin: api-surface
+      args:
+        - "--url"
+        - "{{.Node.url}}"
+        - "--mode"
+        - "graphql"
+        - "--json"
+      timeout: 10m
+      retries: 1
+    concurrency: 4
+    enabled: false
+
+  # --- Auth / identity posture ---
+
+  - name: oidc_discovery
+    parser: auth_surface_json
+    subscribes:
+      node_type: URL
+      predicate: "n.status_code = 200"
+    command:
+      bin: auth-surface
+      args: ["--url", "{{.Node.url}}", "--mode", "oidc", "--json"]
+      timeout: 5m
+      retries: 1
+    concurrency: 4
+    enabled: false
+
+  # --- Advanced web classes ---
+
+  - name: http_desync_probe
+    parser: http_advanced_vuln_json
+    subscribes:
+      node_type: URL
+      predicate: "n.status_code = 200"
+    command:
+      bin: web-advanced
+      args: ["--url", "{{.Node.url}}", "--check", "desync", "--json"]
+      timeout: 10m
+      retries: 1
+    concurrency: 2
+    enabled: false
+
+  # --- Mail posture ---
+
+  - name: mx_posture_audit
+    parser: mail_posture_json
+    subscribes:
+      node_type: Domain
+      predicate: "n.in_scope = true"
+    command:
+      bin: mail-posture
+      args: ["--domain", "{{.Node.fqdn}}", "--json"]
+      timeout: 5m
+      retries: 1
+    concurrency: 2
     enabled: false

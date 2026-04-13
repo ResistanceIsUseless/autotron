@@ -120,15 +120,16 @@ func (p *webscopeJSONLParser) processEndpoint(result *Result, rec webscopeRecord
 		method = "GET"
 	}
 
-	key := fmt.Sprintf("%s|%s|%s", rec.URL, method, rec.Path)
+	key := endpointID(rec.URL, method, rec.Path)
 	result.Nodes = append(result.Nodes, graph.Node{
 		Type:       graph.NodeEndpoint,
 		PrimaryKey: key,
 		Props: map[string]any{
-			"url":    rec.URL,
-			"method": method,
-			"path":   rec.Path,
-			"params": rec.Params,
+			"endpoint_id": key,
+			"url":         rec.URL,
+			"method":      method,
+			"path":        rec.Path,
+			"params":      rec.Params,
 		},
 	})
 
@@ -146,14 +147,15 @@ func (p *webscopeJSONLParser) processForm(result *Result, rec webscopeRecord, tr
 		return
 	}
 
-	key := fmt.Sprintf("%s|%s", rec.URL, rec.Action)
+	key := formID(rec.URL, rec.Action)
 	result.Nodes = append(result.Nodes, graph.Node{
 		Type:       graph.NodeForm,
 		PrimaryKey: key,
 		Props: map[string]any{
-			"url":    rec.URL,
-			"action": rec.Action,
-			"fields": rec.Fields,
+			"form_id": key,
+			"url":     rec.URL,
+			"action":  rec.Action,
+			"fields":  rec.Fields,
 		},
 	})
 
@@ -186,7 +188,7 @@ func (p *webscopeJSONLParser) processJSFile(result *Result, rec webscopeRecord, 
 	if hash == "" {
 		hash = "unknown"
 	}
-	key := fmt.Sprintf("%s|%s", rec.URL, hash)
+	key := jsFileID(rec.URL, hash)
 
 	if seen[key] {
 		return
@@ -197,9 +199,10 @@ func (p *webscopeJSONLParser) processJSFile(result *Result, rec webscopeRecord, 
 		Type:       graph.NodeJSFile,
 		PrimaryKey: key,
 		Props: map[string]any{
-			"url":    rec.URL,
-			"sha256": hash,
-			"size":   rec.Size,
+			"jsfile_id": key,
+			"url":       rec.URL,
+			"sha256":    hash,
+			"size":      rec.Size,
 		},
 	})
 
