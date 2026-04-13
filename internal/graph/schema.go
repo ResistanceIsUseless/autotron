@@ -61,6 +61,14 @@ type Node struct {
 	Props      map[string]any `json:"props"`       // all properties including BaseProps fields
 }
 
+// PendingWork is a dispatch unit returned by graph queries. It always includes
+// a triggering node and may include edge-derived context used for template
+// expansion (for example DNS-first HTTP resolution data).
+type PendingWork struct {
+	Node      Node
+	EdgeProps map[string]any
+}
+
 // Edge represents a relationship between two nodes.
 type Edge struct {
 	Type     RelType        `json:"type"`
@@ -88,6 +96,27 @@ type Finding struct {
 	LastSeen   time.Time      `json:"last_seen"`
 }
 
+// FindingSummary is a read model used by reporting views.
+type FindingSummary struct {
+	ID           string   `json:"id"`
+	Title        string   `json:"title"`
+	Type         string   `json:"type"`
+	Severity     string   `json:"severity"`
+	Confidence   string   `json:"confidence"`
+	Tools        []string `json:"tools"`
+	AssetCount   int64    `json:"asset_count"`
+	LastSeen     string   `json:"last_seen"`
+	CanonicalKey string   `json:"canonical_key"`
+}
+
+type TopFindingsOptions struct {
+	Limit      int
+	Severity   string
+	Confidence string
+	Tool       string
+	Since      string
+}
+
 // PrimaryKeyField returns the Neo4j property name used as the uniqueness
 // constraint for a given node type. This is the single source of truth for
 // the MERGE key in upsert operations.
@@ -106,13 +135,13 @@ func PrimaryKeyField(nt NodeType) string {
 	case NodeURL:
 		return "url"
 	case NodeTechnology:
-		return "name" // composite key (name,version) handled in upsert
+		return "tech_id"
 	case NodeJSFile:
-		return "url" // composite key (url,sha256) handled in upsert
+		return "jsfile_id"
 	case NodeEndpoint:
-		return "url" // composite key (url,method,path) handled in upsert
+		return "endpoint_id"
 	case NodeForm:
-		return "url" // composite key (url,action) handled in upsert
+		return "form_id"
 	case NodeFinding:
 		return "id"
 	case NodeScanRun:
@@ -132,6 +161,12 @@ func Constraints() []string {
 		`CREATE CONSTRAINT service_key IF NOT EXISTS FOR (n:Service) REQUIRE n.ip_port IS UNIQUE`,
 		`CREATE CONSTRAINT cert_sha IF NOT EXISTS FOR (n:Certificate) REQUIRE n.sha256 IS UNIQUE`,
 		`CREATE CONSTRAINT url_unique IF NOT EXISTS FOR (n:URL) REQUIRE n.url IS UNIQUE`,
+		`CREATE CONSTRAINT tech_id_key IF NOT EXISTS FOR (n:Technology) REQUIRE n.tech_id IS UNIQUE`,
+		`CREATE CONSTRAINT jsfile_id_key IF NOT EXISTS FOR (n:JSFile) REQUIRE n.jsfile_id IS UNIQUE`,
+		`CREATE CONSTRAINT endpoint_id_key IF NOT EXISTS FOR (n:Endpoint) REQUIRE n.endpoint_id IS UNIQUE`,
+		`CREATE CONSTRAINT form_id_key IF NOT EXISTS FOR (n:Form) REQUIRE n.form_id IS UNIQUE`,
+
+		// Backward-compat constraints retained while data migrates to synthetic IDs.
 		`CREATE CONSTRAINT tech_key IF NOT EXISTS FOR (n:Technology) REQUIRE (n.name, n.version) IS UNIQUE`,
 		`CREATE CONSTRAINT js_key IF NOT EXISTS FOR (n:JSFile) REQUIRE (n.url, n.sha256) IS UNIQUE`,
 		`CREATE CONSTRAINT finding_id IF NOT EXISTS FOR (n:Finding) REQUIRE n.id IS UNIQUE`,
@@ -148,6 +183,7 @@ func Indexes() []string {
 		`CREATE INDEX url_status IF NOT EXISTS FOR (n:URL) ON (n.status_code)`,
 		`CREATE INDEX finding_severity IF NOT EXISTS FOR (n:Finding) ON (n.severity)`,
 		`CREATE INDEX finding_tool IF NOT EXISTS FOR (n:Finding) ON (n.tool)`,
+		`CREATE INDEX finding_canonical IF NOT EXISTS FOR (n:Finding) ON (n.canonical_key)`,
 		`CREATE INDEX node_inscope IF NOT EXISTS FOR (n:Subdomain) ON (n.in_scope)`,
 	}
 }

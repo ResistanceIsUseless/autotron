@@ -68,6 +68,8 @@ type EnricherDef struct {
 type SubscriptionDef struct {
 	NodeType  graph.NodeType `yaml:"node_type"`
 	Predicate string         `yaml:"predicate"` // Cypher WHERE fragment
+	Match     string         `yaml:"match"`     // optional Cypher pattern rooted at n
+	Returns   []string       `yaml:"returns"`   // optional edge context fields
 }
 
 // CommandDef defines how to invoke an external tool.
@@ -76,6 +78,7 @@ type CommandDef struct {
 	Args    []string      `yaml:"args"`
 	Stdin   string        `yaml:"stdin"` // template piped to tool's stdin (optional)
 	Timeout time.Duration `yaml:"timeout"`
+	Retries int           `yaml:"retries"`
 }
 
 // EnrichersConfig is the top-level wrapper for enrichers.yaml.

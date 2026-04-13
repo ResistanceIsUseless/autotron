@@ -25,24 +25,24 @@ func NewDedupTracker() *DedupTracker {
 	}
 }
 
-// key builds a deterministic hash for a (node_key, enricher_name) pair.
-func key(nodeKey, enricherName string) string {
-	h := sha256.Sum256([]byte(nodeKey + "|" + enricherName))
+// key builds a deterministic hash for a (node_key, edge_context, enricher_name) tuple.
+func key(nodeKey, edgeKey, enricherName string) string {
+	h := sha256.Sum256([]byte(nodeKey + "|" + edgeKey + "|" + enricherName))
 	return fmt.Sprintf("%x", h[:16])
 }
 
-// Check returns true if this (node, enricher) pair has already been dispatched.
-func (d *DedupTracker) Check(nodeKey, enricherName string) bool {
+// Check returns true if this (node, edge context, enricher) tuple has already been dispatched.
+func (d *DedupTracker) Check(nodeKey, edgeKey, enricherName string) bool {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	return d.seen[key(nodeKey, enricherName)]
+	return d.seen[key(nodeKey, edgeKey, enricherName)]
 }
 
-// Mark records that a (node, enricher) pair has been dispatched.
-func (d *DedupTracker) Mark(nodeKey, enricherName string) {
+// Mark records that a (node, edge context, enricher) tuple has been dispatched.
+func (d *DedupTracker) Mark(nodeKey, edgeKey, enricherName string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.seen[key(nodeKey, enricherName)] = true
+	d.seen[key(nodeKey, edgeKey, enricherName)] = true
 }
 
 // Reset clears the tracker between iterations.

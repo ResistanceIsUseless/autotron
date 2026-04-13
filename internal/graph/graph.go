@@ -2,8 +2,11 @@ package graph
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -17,6 +20,8 @@ type Client struct {
 	driver neo4j.DriverWithContext
 	logger *slog.Logger
 }
+
+var asAliasPattern = regexp.MustCompile(`(?i)^(.+)\s+AS\s+([A-Za-z_][A-Za-z0-9_]*)$`)
 
 // NewClient creates a graph client and verifies connectivity.
 func NewClient(ctx context.Context, uri, username, password string, logger *slog.Logger) (*Client, error) {
@@ -94,6 +99,9 @@ func (c *Client) UpsertNode(ctx context.Context, node Node) (created bool, err e
 		val, _ := result.Record().Get("created")
 		created, _ = val.(bool)
 	}
+	if err := result.Err(); err != nil {
+		return false, fmt.Errorf("upsert %s(%s): %w", node.Type, node.PrimaryKey, err)
+	}
 
 	c.logger.Debug("upserted node", "type", node.Type, "key", node.PrimaryKey, "created", created)
 	return created, nil
@@ -131,7 +139,12 @@ func (c *Client) UpsertEdge(ctx context.Context, edge Edge) error {
 		params["props"] = edge.Props
 	}
 
-	if _, err := session.Run(ctx, cypher, params); err != nil {
+	result, err := session.Run(ctx, cypher, params)
+	if err != nil {
+		return fmt.Errorf("upsert edge %s->%s(%s->%s): %w",
+			edge.FromType, edge.ToType, edge.FromKey, edge.ToKey, err)
+	}
+	if _, err := result.Consume(ctx); err != nil {
 		return fmt.Errorf("upsert edge %s->%s(%s->%s): %w",
 			edge.FromType, edge.ToType, edge.FromKey, edge.ToKey, err)
 	}
@@ -147,38 +160,133 @@ func (c *Client) UpsertEdge(ctx context.Context, edge Edge) error {
 // UpsertFinding persists a Finding node and creates a HAS_FINDING edge from
 // the parent node.
 func (c *Client) UpsertFinding(ctx context.Context, finding Finding, parentType NodeType, parentKey string) error {
-	node := Node{
-		Type:       NodeFinding,
-		PrimaryKey: finding.ID,
-		Props: map[string]any{
-			"type":       finding.Type,
-			"title":      finding.Title,
-			"severity":   finding.Severity,
-			"confidence": finding.Confidence,
-			"tool":       finding.Tool,
-		},
-	}
-	if len(finding.CVE) > 0 {
-		node.Props["cve"] = finding.CVE
-	}
-	if len(finding.CWE) > 0 {
-		node.Props["cwe"] = finding.CWE
-	}
+	canonicalType, canonicalKey := CorrelateFinding(finding, parentType, parentKey)
+	findingID := canonicalFindingID(canonicalKey, finding.ID)
+	parentPK := PrimaryKeyField(parentType)
+	now := time.Now().UTC().Format(time.RFC3339)
+	evidenceJSON := ""
 	if len(finding.Evidence) > 0 {
-		node.Props["evidence"] = finding.Evidence
+		if raw, err := json.Marshal(finding.Evidence); err == nil {
+			evidenceJSON = string(raw)
+		}
+	}
+	cve := finding.CVE
+	if len(cve) == 0 {
+		cve = nil
+	}
+	cwe := finding.CWE
+	if len(cwe) == 0 {
+		cwe = nil
 	}
 
-	if _, err := c.UpsertNode(ctx, node); err != nil {
-		return err
-	}
+	session := c.driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeWrite})
+	defer session.Close(ctx)
 
-	return c.UpsertEdge(ctx, Edge{
-		Type:     RelHAS_FINDING,
-		FromType: parentType,
-		FromKey:  parentKey,
-		ToType:   NodeFinding,
-		ToKey:    finding.ID,
+	cypher := fmt.Sprintf(`
+MATCH (p:%s {%s: $parent_key})
+MERGE (f:Finding {id: $id})
+ON CREATE SET
+  f.type = $type,
+  f.title = $title,
+  f.severity = coalesce($severity, 'info'),
+  f.confidence = coalesce($confidence, 'tentative'),
+  f.tool = $tool,
+  f.tools = [$tool],
+  f.source_ids = [$source_id],
+  f.canonical_type = $canonical_type,
+  f.canonical_key = $canonical_key,
+  f.cve = $cve,
+  f.cwe = $cwe,
+  f.evidence_json = $evidence_json,
+  f.first_seen = $now,
+  f.last_seen = $now
+ON MATCH SET
+  f.last_seen = $now,
+  f.type = CASE WHEN coalesce(f.type, '') = '' THEN $type ELSE f.type END,
+  f.title = CASE WHEN coalesce(f.title, '') = '' THEN $title ELSE f.title END,
+  f.severity = CASE
+    WHEN (CASE coalesce(f.severity, 'info') WHEN 'critical' THEN 5 WHEN 'high' THEN 4 WHEN 'medium' THEN 3 WHEN 'low' THEN 2 ELSE 1 END)
+       >= (CASE coalesce($severity, 'info') WHEN 'critical' THEN 5 WHEN 'high' THEN 4 WHEN 'medium' THEN 3 WHEN 'low' THEN 2 ELSE 1 END)
+    THEN f.severity
+    ELSE $severity
+  END,
+  f.confidence = CASE
+    WHEN (CASE coalesce(f.confidence, 'tentative') WHEN 'confirmed' THEN 3 WHEN 'firm' THEN 2 ELSE 1 END)
+       >= (CASE coalesce($confidence, 'tentative') WHEN 'confirmed' THEN 3 WHEN 'firm' THEN 2 ELSE 1 END)
+    THEN f.confidence
+    ELSE $confidence
+  END,
+  f.tool = CASE WHEN coalesce(f.tool, '') = '' THEN $tool ELSE f.tool END,
+  f.tools = CASE
+    WHEN f.tools IS NULL THEN [$tool]
+    WHEN $tool IN f.tools THEN f.tools
+    ELSE f.tools + $tool
+  END,
+  f.source_ids = CASE
+    WHEN f.source_ids IS NULL THEN [$source_id]
+    WHEN $source_id IN f.source_ids THEN f.source_ids
+    ELSE f.source_ids + $source_id
+  END,
+  f.canonical_type = coalesce(f.canonical_type, $canonical_type),
+  f.canonical_key = coalesce(f.canonical_key, $canonical_key),
+  f.cve = CASE
+    WHEN $cve IS NULL THEN f.cve
+    WHEN f.cve IS NULL THEN $cve
+    ELSE f.cve + [x IN $cve WHERE NOT x IN f.cve]
+  END,
+  f.cwe = CASE
+    WHEN $cwe IS NULL THEN f.cwe
+    WHEN f.cwe IS NULL THEN $cwe
+    ELSE f.cwe + [x IN $cwe WHERE NOT x IN f.cwe]
+  END,
+  f.evidence_json = CASE
+    WHEN coalesce(f.evidence_json, '') = '' THEN $evidence_json
+    ELSE f.evidence_json
+  END
+MERGE (p)-[:HAS_FINDING]->(f)
+RETURN f.id AS id
+`, parentType, parentPK)
+
+	result, err := session.Run(ctx, cypher, map[string]any{
+		"parent_key":     parentKey,
+		"id":             findingID,
+		"source_id":      finding.ID,
+		"type":           finding.Type,
+		"title":          finding.Title,
+		"severity":       finding.Severity,
+		"confidence":     finding.Confidence,
+		"tool":           finding.Tool,
+		"canonical_type": canonicalType,
+		"canonical_key":  canonicalKey,
+		"cve":            cve,
+		"cwe":            cwe,
+		"evidence_json":  evidenceJSON,
+		"now":            now,
 	})
+	if err != nil {
+		return fmt.Errorf("upsert finding %s: %w", findingID, err)
+	}
+	if !result.Next(ctx) {
+		if err := result.Err(); err != nil {
+			return fmt.Errorf("upsert finding %s: %w", findingID, err)
+		}
+		return fmt.Errorf("upsert finding %s: parent %s(%s) not found", findingID, parentType, parentKey)
+	}
+	if err := result.Err(); err != nil {
+		return fmt.Errorf("upsert finding %s: %w", findingID, err)
+	}
+	if _, err := result.Consume(ctx); err != nil {
+		return fmt.Errorf("upsert finding %s: %w", findingID, err)
+	}
+
+	c.logger.Debug("upserted finding",
+		"id", findingID,
+		"canonical_type", canonicalType,
+		"tool", finding.Tool,
+		"parent", fmt.Sprintf("%s(%s)", parentType, parentKey),
+	)
+
+	return nil
 }
 
 // MarkEnriched appends the enricher name to a node's enriched_by list.
@@ -196,10 +304,14 @@ func (c *Client) MarkEnriched(ctx context.Context, nodeType NodeType, nodeKey st
 		nodeType, pkField,
 	)
 
-	if _, err := session.Run(ctx, cypher, map[string]any{
+	result, err := session.Run(ctx, cypher, map[string]any{
 		"key":      nodeKey,
 		"enricher": enricherName,
-	}); err != nil {
+	})
+	if err != nil {
+		return fmt.Errorf("mark enriched %s(%s) by %s: %w", nodeType, nodeKey, enricherName, err)
+	}
+	if _, err := result.Consume(ctx); err != nil {
 		return fmt.Errorf("mark enriched %s(%s) by %s: %w", nodeType, nodeKey, enricherName, err)
 	}
 	return nil
@@ -208,29 +320,25 @@ func (c *Client) MarkEnriched(ctx context.Context, nodeType NodeType, nodeKey st
 // QueryPendingNodes returns nodes of the given type that have NOT been
 // enriched by the named enricher and match the optional predicate.
 // The predicate is a raw Cypher WHERE fragment (validated at config load).
-func (c *Client) QueryPendingNodes(ctx context.Context, nodeType NodeType, enricherName string, predicate string) ([]Node, error) {
+func (c *Client) QueryPendingNodes(
+	ctx context.Context,
+	nodeType NodeType,
+	enricherName string,
+	predicate string,
+	match string,
+	returns []string,
+) ([]PendingWork, error) {
 	session := c.driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeRead})
 	defer session.Close(ctx)
 
-	var whereClauses []string
-	whereClauses = append(whereClauses,
-		fmt.Sprintf("NOT '%s' IN coalesce(n.enriched_by, [])", enricherName),
-	)
-	if predicate != "" {
-		whereClauses = append(whereClauses, predicate)
-	}
+	cypher := buildPendingNodesQuery(nodeType, predicate, match, returns)
 
-	cypher := fmt.Sprintf(
-		`MATCH (n:%s) WHERE %s RETURN n`,
-		nodeType, strings.Join(whereClauses, " AND "),
-	)
-
-	result, err := session.Run(ctx, cypher, nil)
+	result, err := session.Run(ctx, cypher, map[string]any{"enricher": enricherName})
 	if err != nil {
 		return nil, fmt.Errorf("query pending %s for %s: %w", nodeType, enricherName, err)
 	}
 
-	var nodes []Node
+	var pending []PendingWork
 	for result.Next(ctx) {
 		record := result.Record()
 		val, _ := record.Get("n")
@@ -251,10 +359,236 @@ func (c *Client) QueryPendingNodes(ctx context.Context, nodeType NodeType, enric
 		if pk, ok := node.Props[pkField]; ok {
 			node.PrimaryKey = fmt.Sprintf("%v", pk)
 		}
-		nodes = append(nodes, node)
+		edgeProps := make(map[string]any)
+		for _, field := range returns {
+			projection, key, ok := parseReturnProjection(field)
+			if !ok {
+				continue
+			}
+			if v, ok := record.Get(key); ok {
+				edgeProps[key] = v
+			} else if projection != key {
+				if v, ok := record.Get(projection); ok {
+					edgeProps[key] = v
+				}
+			}
+		}
+
+		pending = append(pending, PendingWork{Node: node, EdgeProps: edgeProps})
+	}
+	if err := result.Err(); err != nil {
+		return nil, fmt.Errorf("query pending %s for %s: %w", nodeType, enricherName, err)
 	}
 
-	return nodes, nil
+	return pending, nil
+}
+
+// ValidatePendingQuery compiles a pending-node subscription query in Neo4j
+// using EXPLAIN. This validates syntax for predicate, optional match pattern,
+// and additional return projections without executing the query.
+func (c *Client) ValidatePendingQuery(
+	ctx context.Context,
+	nodeType NodeType,
+	predicate string,
+	match string,
+	returns []string,
+) error {
+	session := c.driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeRead})
+	defer session.Close(ctx)
+
+	cypher := buildPendingNodesQuery(nodeType, predicate, match, returns)
+	explain := "EXPLAIN " + cypher
+
+	result, err := session.Run(ctx, explain, map[string]any{"enricher": "validate"})
+	if err != nil {
+		return fmt.Errorf("compile query: %w", err)
+	}
+	if _, err := result.Consume(ctx); err != nil {
+		return fmt.Errorf("compile query: %w", err)
+	}
+
+	return nil
+}
+
+func parseReturnProjection(field string) (projection string, key string, ok bool) {
+	trimmed := strings.TrimSpace(field)
+	if trimmed == "" {
+		return "", "", false
+	}
+
+	matches := asAliasPattern.FindStringSubmatch(trimmed)
+	if len(matches) == 3 {
+		return strings.TrimSpace(matches[1]), strings.TrimSpace(matches[2]), true
+	}
+
+	return trimmed, trimmed, true
+}
+
+// TopFindings returns canonical findings prioritized by severity, confidence,
+// and number of affected parent assets.
+func (c *Client) TopFindings(ctx context.Context, limit int) ([]FindingSummary, error) {
+	return c.TopFindingsWithOptions(ctx, TopFindingsOptions{Limit: limit})
+}
+
+func (c *Client) TopFindingsWithOptions(ctx context.Context, opts TopFindingsOptions) ([]FindingSummary, error) {
+	if opts.Limit <= 0 {
+		opts.Limit = 25
+	}
+	severity := strings.ToLower(strings.TrimSpace(opts.Severity))
+	confidence := strings.ToLower(strings.TrimSpace(opts.Confidence))
+	tool := strings.ToLower(strings.TrimSpace(opts.Tool))
+	since := strings.TrimSpace(opts.Since)
+
+	session := c.driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeRead})
+	defer session.Close(ctx)
+
+	cypher := `
+MATCH (p)-[:HAS_FINDING]->(f:Finding)
+WHERE ($severity = '' OR toLower(coalesce(f.severity, '')) = $severity)
+  AND ($confidence = '' OR toLower(coalesce(f.confidence, '')) = $confidence)
+  AND ($tool = '' OR any(t IN coalesce(f.tools, CASE WHEN f.tool IS NULL THEN [] ELSE [f.tool] END) WHERE toLower(t) = $tool))
+  AND ($since = '' OR toString(coalesce(f.last_seen, '')) >= $since)
+WITH f, count(DISTINCT p) AS asset_count
+RETURN
+  f.id AS id,
+  f.title AS title,
+  f.type AS type,
+  coalesce(f.severity, 'info') AS severity,
+  coalesce(f.confidence, 'tentative') AS confidence,
+  coalesce(f.tools, CASE WHEN f.tool IS NULL THEN [] ELSE [f.tool] END) AS tools,
+  asset_count,
+  coalesce(f.last_seen, '') AS last_seen,
+  coalesce(f.canonical_key, '') AS canonical_key
+ORDER BY
+  CASE coalesce(f.severity, 'info')
+    WHEN 'critical' THEN 5
+    WHEN 'high' THEN 4
+    WHEN 'medium' THEN 3
+    WHEN 'low' THEN 2
+    ELSE 1
+  END DESC,
+  CASE coalesce(f.confidence, 'tentative')
+    WHEN 'confirmed' THEN 3
+    WHEN 'firm' THEN 2
+    ELSE 1
+  END DESC,
+  asset_count DESC,
+  coalesce(f.last_seen, '') DESC
+LIMIT $limit`
+
+	result, err := session.Run(ctx, cypher, map[string]any{
+		"limit":      opts.Limit,
+		"severity":   severity,
+		"confidence": confidence,
+		"tool":       tool,
+		"since":      since,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("query top findings: %w", err)
+	}
+
+	var out []FindingSummary
+	for result.Next(ctx) {
+		rec := result.Record()
+		s := FindingSummary{}
+		if v, ok := rec.Get("id"); ok {
+			s.ID = fmt.Sprintf("%v", v)
+		}
+		if v, ok := rec.Get("title"); ok {
+			s.Title = fmt.Sprintf("%v", v)
+		}
+		if v, ok := rec.Get("type"); ok {
+			s.Type = fmt.Sprintf("%v", v)
+		}
+		if v, ok := rec.Get("severity"); ok {
+			s.Severity = fmt.Sprintf("%v", v)
+		}
+		if v, ok := rec.Get("confidence"); ok {
+			s.Confidence = fmt.Sprintf("%v", v)
+		}
+		if v, ok := rec.Get("tools"); ok {
+			s.Tools = toStringSlice(v)
+		}
+		if v, ok := rec.Get("asset_count"); ok {
+			s.AssetCount = toInt64(v)
+		}
+		if v, ok := rec.Get("last_seen"); ok {
+			s.LastSeen = fmt.Sprintf("%v", v)
+		}
+		if v, ok := rec.Get("canonical_key"); ok {
+			s.CanonicalKey = fmt.Sprintf("%v", v)
+		}
+		out = append(out, s)
+	}
+	if err := result.Err(); err != nil {
+		return nil, fmt.Errorf("query top findings: %w", err)
+	}
+
+	return out, nil
+}
+
+func toStringSlice(v any) []string {
+	switch arr := v.(type) {
+	case []string:
+		return arr
+	case []any:
+		out := make([]string, 0, len(arr))
+		for _, item := range arr {
+			out = append(out, fmt.Sprintf("%v", item))
+		}
+		return out
+	default:
+		if strings.TrimSpace(fmt.Sprintf("%v", v)) == "" {
+			return nil
+		}
+		return []string{fmt.Sprintf("%v", v)}
+	}
+}
+
+func toInt64(v any) int64 {
+	switch n := v.(type) {
+	case int:
+		return int64(n)
+	case int64:
+		return n
+	case int32:
+		return int64(n)
+	case float64:
+		return int64(n)
+	case float32:
+		return int64(n)
+	default:
+		return 0
+	}
+}
+
+func buildPendingNodesQuery(nodeType NodeType, predicate string, match string, returns []string) string {
+	whereClauses := []string{"NOT $enricher IN coalesce(n.enriched_by, [])"}
+
+	trimmed := strings.TrimSpace(predicate)
+	if trimmed != "" {
+		whereClauses = append(whereClauses, fmt.Sprintf("(%s)", trimmed))
+	}
+
+	matchClause := strings.TrimSpace(match)
+	if matchClause != "" {
+		matchClause = " " + matchClause
+	}
+
+	returnFields := []string{"n"}
+	for _, field := range returns {
+		trimmedField := strings.TrimSpace(field)
+		if trimmedField == "" {
+			continue
+		}
+		returnFields = append(returnFields, trimmedField)
+	}
+	sort.Strings(returnFields[1:])
+
+	return fmt.Sprintf(
+		`MATCH (n:%s)%s WHERE %s RETURN %s`,
+		nodeType, matchClause, strings.Join(whereClauses, " AND "), strings.Join(returnFields, ", "),
+	)
 }
 
 // SeedDomain creates an in-scope Domain node at discovery depth 0.

@@ -5,6 +5,7 @@ package engine
 
 import (
 	"net"
+	"net/url"
 	"strings"
 
 	"github.com/resistanceisuseless/autotron/internal/config"
@@ -68,6 +69,8 @@ func (sv *ScopeValidator) IsInScopeWithParent(node graph.Node, parentInScope boo
 		// caused this IP to be discovered (e.g. an in-scope subdomain
 		// resolved via dnsx).
 		return parentInScope
+	case graph.NodeURL, graph.NodeEndpoint, graph.NodeForm, graph.NodeJSFile:
+		return sv.urlBearingNodeInScope(node)
 	default:
 		// Other node types (Service, URL, etc.) inherit scope from parent
 		// context. The engine passes this through props or the parent flag.
@@ -83,6 +86,25 @@ func (sv *ScopeValidator) IsInScopeWithParent(node graph.Node, parentInScope boo
 	}
 }
 
+// ShouldEnrich is a strict gate for active probing. It requires persisted
+// in_scope=true and re-validates host-bearing nodes to avoid drifting into
+// out-of-scope external assets discovered from in-scope pages.
+func (sv *ScopeValidator) ShouldEnrich(node graph.Node) bool {
+	inScope, _ := node.Props["in_scope"].(bool)
+	if !inScope {
+		return false
+	}
+
+	switch node.Type {
+	case graph.NodeDomain, graph.NodeSubdomain:
+		return sv.domainInScope(node)
+	case graph.NodeURL, graph.NodeEndpoint, graph.NodeForm, graph.NodeJSFile:
+		return sv.urlBearingNodeInScope(node)
+	default:
+		return true
+	}
+}
+
 // domainInScope checks if a domain/subdomain FQDN matches any scope domain
 // via suffix matching.
 func (sv *ScopeValidator) domainInScope(node graph.Node) bool {
@@ -90,15 +112,84 @@ func (sv *ScopeValidator) domainInScope(node graph.Node) bool {
 	if fqdn == "" {
 		return false
 	}
-	fqdn = strings.ToLower(strings.TrimSuffix(fqdn, "."))
+	fqdn = normalizeDomainLike(fqdn)
 
 	for _, domain := range sv.domains {
-		domain = strings.ToLower(strings.TrimSuffix(domain, "."))
+		domain = normalizeDomainLike(domain)
 		if fqdn == domain || strings.HasSuffix(fqdn, "."+domain) {
 			return true
 		}
 	}
 	return false
+}
+
+func (sv *ScopeValidator) urlBearingNodeInScope(node graph.Node) bool {
+	host, ok := hostFromNode(node)
+	if !ok || host == "" {
+		return false
+	}
+
+	if ip := net.ParseIP(host); ip != nil {
+		if !sv.ipDirectHTTP {
+			return false
+		}
+		if len(sv.cidrs) == 0 {
+			return true
+		}
+		for _, cidr := range sv.cidrs {
+			if cidr.Contains(ip) {
+				return true
+			}
+		}
+		return false
+	}
+
+	host = normalizeDomainLike(host)
+	for _, domain := range sv.domains {
+		domain = normalizeDomainLike(domain)
+		if host == domain || strings.HasSuffix(host, "."+domain) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func hostFromNode(node graph.Node) (string, bool) {
+	switch node.Type {
+	case graph.NodeURL:
+		if host, _ := node.Props["host"].(string); strings.TrimSpace(host) != "" {
+			return normalizeDomainLike(host), true
+		}
+		urlStr, _ := node.Props["url"].(string)
+		return hostFromURLString(urlStr)
+	case graph.NodeEndpoint, graph.NodeForm, graph.NodeJSFile:
+		urlStr, _ := node.Props["url"].(string)
+		return hostFromURLString(urlStr)
+	default:
+		return "", false
+	}
+}
+
+func hostFromURLString(rawURL string) (string, bool) {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return "", false
+	}
+
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "", false
+	}
+	host := strings.TrimSpace(parsed.Hostname())
+	if host == "" {
+		return "", false
+	}
+	return normalizeDomainLike(host), true
+}
+
+func normalizeDomainLike(s string) string {
+	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(s), "."))
 }
 
 // ipInScope checks if an IP address falls within any scope CIDR.

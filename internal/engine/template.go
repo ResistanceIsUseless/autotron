@@ -109,9 +109,10 @@ func ValidateTemplates(args []string, stdinTmpl string) error {
 			"product": "http",
 		},
 		Edge: map[string]any{
-			"resolved_ip": "127.0.0.1",
-			"port":        "443",
-			"scheme":      "https",
+			"resolved_ip":     "127.0.0.1",
+			"port":            "443",
+			"scheme":          "https",
+			"service_product": "https",
 		},
 		ScanRun: ScanRunData{ID: "validate-run"},
 		Config: map[string]any{

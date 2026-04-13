@@ -17,6 +17,21 @@ import (
 // ErrTimeout is returned when a tool exceeds its configured timeout.
 var ErrTimeout = errors.New("tool execution timed out")
 
+// ExecError indicates a non-retryable subprocess startup failure
+// (binary not found, permission denied, etc.).
+type ExecError struct {
+	Bin string
+	Err error
+}
+
+func (e *ExecError) Error() string {
+	return fmt.Sprintf("exec %s: %v", e.Bin, e.Err)
+}
+
+func (e *ExecError) Unwrap() error {
+	return e.Err
+}
+
 // Result holds the output of a subprocess execution.
 type Result struct {
 	Stdout   *bytes.Buffer
@@ -73,6 +88,10 @@ func (r *Runner) Run(ctx context.Context, cfg RunConfig) (*Result, error) {
 			)
 		}
 
+		if !isRetryable(err) {
+			return nil, err
+		}
+
 		// Don't retry on context cancellation.
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -89,6 +108,10 @@ func (r *Runner) Run(ctx context.Context, cfg RunConfig) (*Result, error) {
 	}
 
 	return nil, fmt.Errorf("after %d attempts: %w", attempts, lastErr)
+}
+
+func isRetryable(err error) bool {
+	return errors.Is(err, ErrTimeout)
 }
 
 // runOnce executes a single subprocess attempt.
@@ -147,7 +170,7 @@ func (r *Runner) runOnce(ctx context.Context, cfg RunConfig) (*Result, error) {
 		}
 
 		// Other errors (binary not found, permission denied, etc.)
-		return nil, fmt.Errorf("exec %s: %w", cfg.Bin, err)
+		return nil, &ExecError{Bin: cfg.Bin, Err: err}
 	}
 
 	r.logger.Debug("tool completed",
