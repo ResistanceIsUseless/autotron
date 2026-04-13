@@ -54,7 +54,7 @@ func main() {
 func parseFlags() config {
 	var cfg config
 	flag.StringVar(&cfg.baseURL, "url", "", "target URL")
-	flag.StringVar(&cfg.mode, "mode", "oidc", "scan mode: oidc")
+	flag.StringVar(&cfg.mode, "mode", "oidc", "scan mode: oidc|oauth|saml")
 	flag.BoolVar(&cfg.jsonOutput, "json", false, "emit JSONL records")
 	flag.DurationVar(&cfg.timeout, "timeout", 15*time.Second, "HTTP timeout per request")
 	flag.Parse()
@@ -70,16 +70,27 @@ func run(cfg config) error {
 		return fmt.Errorf("invalid --url: %s", cfg.baseURL)
 	}
 	mode := strings.ToLower(strings.TrimSpace(cfg.mode))
-	if mode != "oidc" {
-		return fmt.Errorf("unsupported --mode %q (supported: oidc)", cfg.mode)
+	if mode != "oidc" && mode != "oauth" && mode != "saml" {
+		return fmt.Errorf("unsupported --mode %q (supported: oidc|oauth|saml)", cfg.mode)
 	}
 
 	ctx := context.Background()
 	client := &http.Client{Timeout: cfg.timeout}
 
-	records, err := oidcProbe(ctx, client, u)
-	if err != nil {
-		return err
+	var (
+		records  []outputRecord
+		probeErr error
+	)
+	switch mode {
+	case "oidc":
+		records, probeErr = oidcProbe(ctx, client, u)
+	case "oauth":
+		records, probeErr = oauthProbe(ctx, client, u)
+	case "saml":
+		records, probeErr = samlProbe(ctx, client, u)
+	}
+	if probeErr != nil {
+		return probeErr
 	}
 
 	for _, rec := range records {
@@ -134,6 +145,128 @@ func oidcProbe(ctx context.Context, client *http.Client, target *url.URL) ([]out
 	return nil, nil
 }
 
+func oauthProbe(ctx context.Context, client *http.Client, target *url.URL) ([]outputRecord, error) {
+	oauthURL := oauthMetadataURL(target)
+	doc, status, _, err := fetchDiscovery(ctx, client, oauthURL)
+	if err != nil {
+		return nil, nil
+	}
+	if status != http.StatusOK {
+		return nil, nil
+	}
+
+	records := []outputRecord{{
+		URL:        oauthURL,
+		Type:       "oauth-metadata-exposed",
+		Severity:   "low",
+		Confidence: "firm",
+		Details:    "OAuth authorization server metadata is publicly accessible",
+	}}
+
+	if strings.TrimSpace(doc.AuthorizationEndpoint) == "" {
+		records = append(records, outputRecord{
+			URL:        oauthURL,
+			Type:       "oauth-missing-authorization-endpoint",
+			Severity:   "medium",
+			Confidence: "firm",
+			Details:    "authorization_endpoint missing from metadata",
+		})
+	} else {
+		records = append(records, analyzeOAuthEndpointHost(target, oauthURL, "authorization_endpoint", doc.AuthorizationEndpoint)...)
+		if containsOpenRedirectSignal(doc.AuthorizationEndpoint) {
+			records = append(records, outputRecord{
+				URL:        oauthURL,
+				Type:       "oauth-open-redirect-candidate",
+				Severity:   "medium",
+				Confidence: "tentative",
+				Details:    "authorization_endpoint contains redirect-like query parameters",
+			})
+		}
+	}
+
+	if strings.TrimSpace(doc.TokenEndpoint) == "" {
+		records = append(records, outputRecord{
+			URL:        oauthURL,
+			Type:       "oauth-missing-token-endpoint",
+			Severity:   "medium",
+			Confidence: "firm",
+			Details:    "token_endpoint missing from metadata",
+		})
+	} else {
+		records = append(records, analyzeOAuthEndpointHost(target, oauthURL, "token_endpoint", doc.TokenEndpoint)...)
+	}
+
+	records = append(records, analyzeDiscovery(target, oauthURL, doc)...)
+	records = append(records, analyzeJWKS(ctx, client, doc)...)
+
+	return records, nil
+}
+
+func samlProbe(ctx context.Context, client *http.Client, target *url.URL) ([]outputRecord, error) {
+	paths := []string{
+		"/saml/metadata",
+		"/saml2/metadata",
+		"/idp/metadata",
+		"/FederationMetadata/2007-06/FederationMetadata.xml",
+	}
+
+	var records []outputRecord
+	for _, p := range paths {
+		full := joinURL(target, p)
+		body, status, err := fetchText(ctx, client, full)
+		if err != nil || status != http.StatusOK {
+			continue
+		}
+
+		lower := strings.ToLower(body)
+		if !strings.Contains(lower, "entitydescriptor") && !strings.Contains(lower, "entitiesdescriptor") {
+			continue
+		}
+
+		records = append(records, outputRecord{
+			URL:        full,
+			Type:       "saml-metadata-exposed",
+			Severity:   "low",
+			Confidence: "firm",
+			Details:    "SAML metadata endpoint is publicly accessible",
+		})
+
+		if !containsXMLTrue(body, "WantAssertionsSigned") {
+			records = append(records, outputRecord{
+				URL:        full,
+				Type:       "saml-unsigned-assertions-candidate",
+				Severity:   "medium",
+				Confidence: "tentative",
+				Details:    "metadata does not clearly require signed assertions",
+			})
+		}
+
+		if !containsXMLElement(lower, "singlelogoutservice") {
+			records = append(records, outputRecord{
+				URL:        full,
+				Type:       "saml-missing-single-logout",
+				Severity:   "low",
+				Confidence: "tentative",
+				Details:    "metadata does not advertise SingleLogoutService",
+			})
+		}
+
+		if !containsXMLElement(lower, "keydescriptor") {
+			records = append(records, outputRecord{
+				URL:        full,
+				Type:       "saml-missing-key-descriptor",
+				Severity:   "medium",
+				Confidence: "tentative",
+				Details:    "metadata lacks KeyDescriptor entries",
+			})
+		}
+
+		return records, nil
+	}
+
+	return nil, nil
+}
+
 func discoveryCandidates(target *url.URL) []string {
 	base := *target
 	base.RawQuery = ""
@@ -166,6 +299,15 @@ func discoveryCandidates(target *url.URL) []string {
 	return dedupeStrings(out)
 }
 
+func oauthMetadataURL(target *url.URL) string {
+	root := *target
+	root.Path = ""
+	root.RawQuery = ""
+	root.Fragment = ""
+	root.Path = "/.well-known/oauth-authorization-server"
+	return root.String()
+}
+
 func fetchDiscovery(ctx context.Context, client *http.Client, target string) (oidcDiscovery, int, []byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
@@ -188,6 +330,100 @@ func fetchDiscovery(ctx context.Context, client *http.Client, target string) (oi
 	}
 
 	return doc, resp.StatusCode, body, nil
+}
+
+func fetchText(ctx context.Context, client *http.Client, target string) (string, int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return "", 0, err
+	}
+	req.Header.Set("Accept", "application/xml,application/json,*/*")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", 0, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	return string(body), resp.StatusCode, nil
+}
+
+func analyzeOAuthEndpointHost(target *url.URL, metadataURL, fieldName, endpoint string) []outputRecord {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return nil
+	}
+
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return []outputRecord{{
+			URL:        metadataURL,
+			Type:       "oauth-endpoint-invalid-url",
+			Severity:   "medium",
+			Confidence: "firm",
+			Details:    fmt.Sprintf("%s is not a valid URL", fieldName),
+		}}
+	}
+
+	var out []outputRecord
+	if u.Scheme != "https" {
+		out = append(out, outputRecord{
+			URL:        metadataURL,
+			Type:       "oauth-endpoint-non-https",
+			Severity:   "medium",
+			Confidence: "firm",
+			Details:    fmt.Sprintf("%s is not HTTPS", fieldName),
+		})
+	}
+	if !strings.EqualFold(u.Hostname(), target.Hostname()) {
+		out = append(out, outputRecord{
+			URL:        metadataURL,
+			Type:       "oauth-endpoint-host-mismatch",
+			Severity:   "medium",
+			Confidence: "firm",
+			Details:    fmt.Sprintf("%s host %s differs from target host %s", fieldName, u.Hostname(), target.Hostname()),
+		})
+	}
+	return out
+}
+
+func containsOpenRedirectSignal(rawURL string) bool {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return false
+	}
+	for k := range u.Query() {
+		lk := strings.ToLower(strings.TrimSpace(k))
+		switch lk {
+		case "redirect", "redirect_uri", "return", "return_url", "next", "continue":
+			return true
+		}
+	}
+	return false
+}
+
+func joinURL(base *url.URL, p string) string {
+	u := *base
+	u.Path = strings.TrimSuffix(base.Path, "/") + p
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String()
+}
+
+func containsXMLTrue(body, attr string) bool {
+	lower := strings.ToLower(body)
+	attr = strings.ToLower(strings.TrimSpace(attr))
+	needle := attr + `="true"`
+	needleSingle := attr + `='true'`
+	return strings.Contains(lower, needle) || strings.Contains(lower, needleSingle)
+}
+
+func containsXMLElement(lowerBody, element string) bool {
+	element = strings.ToLower(strings.TrimSpace(element))
+	if element == "" {
+		return false
+	}
+	return strings.Contains(lowerBody, "<"+element) || strings.Contains(lowerBody, ":"+element)
 }
 
 func analyzeDiscovery(target *url.URL, discoveryURL string, doc oidcDiscovery) []outputRecord {

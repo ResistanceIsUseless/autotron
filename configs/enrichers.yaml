@@ -1066,6 +1066,42 @@ enrichers:
     concurrency: 4
     enabled: false
 
+  - name: oauth_misconfig_probe
+    parser: auth_surface_json
+    subscribes:
+      node_type: URL
+      predicate: "n.status_code = 200"
+    command:
+      bin: auth-surface
+      args:
+        - "--url"
+        - "{{.Node.url}}"
+        - "--mode"
+        - "oauth"
+        - "--json"
+      timeout: 5m
+      retries: 1
+    concurrency: 4
+    enabled: false
+
+  - name: saml_metadata_enum
+    parser: auth_surface_json
+    subscribes:
+      node_type: URL
+      predicate: "n.status_code = 200"
+    command:
+      bin: auth-surface
+      args:
+        - "--url"
+        - "{{.Node.url}}"
+        - "--mode"
+        - "saml"
+        - "--json"
+      timeout: 5m
+      retries: 1
+    concurrency: 4
+    enabled: false
+
   # --- Advanced web classes ---
 
   - name: http_desync_probe
@@ -1122,6 +1158,60 @@ enrichers:
     concurrency: 2
     enabled: false
 
+  - name: ssrf_gadget_discovery
+    parser: web_vuln_generic
+    subscribes:
+      node_type: URL
+      predicate: "n.status_code = 200"
+    command:
+      bin: web-advanced
+      args:
+        - "--url"
+        - "{{.Node.url}}"
+        - "--check"
+        - "waf-diff"
+        - "--json"
+      timeout: 10m
+      retries: 1
+    concurrency: 2
+    enabled: false
+
+  - name: idor_candidate_mapper
+    parser: web_vuln_generic
+    subscribes:
+      node_type: Endpoint
+      predicate: "n.in_scope = true"
+    command:
+      bin: web-advanced
+      args:
+        - "--url"
+        - "{{.Node.url}}{{.Node.path}}"
+        - "--check"
+        - "cache-poison"
+        - "--json"
+      timeout: 10m
+      retries: 1
+    concurrency: 2
+    enabled: false
+
+  - name: csrf_policy_audit
+    parser: web_vuln_generic
+    subscribes:
+      node_type: Endpoint
+      predicate: "n.in_scope = true"
+    command:
+      bin: web-advanced
+      args:
+        - "--url"
+        - "{{.Node.url}}{{.Node.path}}"
+        - "--check"
+        - "desync"
+        - "--json"
+      timeout: 10m
+      retries: 1
+    concurrency: 2
+    enabled: false
+
   # --- Mail posture ---
 
   - name: mx_posture_audit
@@ -1138,4 +1228,112 @@ enrichers:
       timeout: 5m
       retries: 1
     concurrency: 2
+    enabled: false
+
+  # --- Mobile artifact recon ---
+
+  - name: apk_endpoint_extract
+    parser: mobile_artifact_json
+    subscribes:
+      node_type: URL
+      predicate: "n.path =~ '.*\\.(apk|xapk)$'"
+    command:
+      bin: mobile-artifact
+      args:
+        - "--artifact-url"
+        - "{{.Node.url}}"
+        - "--artifact-type"
+        - "apk"
+        - "--json"
+        - "--max-endpoints"
+        - "200"
+      timeout: 10m
+      retries: 1
+    concurrency: 2
+    enabled: false
+
+  - name: ipa_endpoint_extract
+    parser: mobile_artifact_json
+    subscribes:
+      node_type: URL
+      predicate: "n.path =~ '.*\\.ipa$'"
+    command:
+      bin: mobile-artifact
+      args:
+        - "--artifact-url"
+        - "{{.Node.url}}"
+        - "--artifact-type"
+        - "ipa"
+        - "--json"
+        - "--max-endpoints"
+        - "200"
+      timeout: 10m
+      retries: 1
+    concurrency: 2
+    enabled: false
+
+  # --- Continuous drift / delta intelligence ---
+
+  - name: delta_new_exposure
+    parser: delta_report_json
+    subscribes:
+      node_type: ScanRun
+      predicate: "n.status = 'completed'"
+    command:
+      bin: delta-intel
+      args:
+        - "--run-id"
+        - "{{.Node.id}}"
+        - "--state-dir"
+        - "{{.Config.output_dir}}/delta"
+        - "--check"
+        - "new-exposure"
+        - "--json"
+        - "--min-growth-ratio"
+        - "1.25"
+      timeout: 30s
+      retries: 1
+    concurrency: 1
+    enabled: false
+
+  - name: delta_new_findings
+    parser: delta_report_json
+    subscribes:
+      node_type: ScanRun
+      predicate: "n.status = 'completed'"
+    command:
+      bin: delta-intel
+      args:
+        - "--run-id"
+        - "{{.Node.id}}"
+        - "--state-dir"
+        - "{{.Config.output_dir}}/delta"
+        - "--check"
+        - "new-findings"
+        - "--json"
+        - "--min-growth-ratio"
+        - "1.25"
+      timeout: 30s
+      retries: 1
+    concurrency: 1
+    enabled: false
+
+  - name: delta_surface_regression
+    parser: delta_report_json
+    subscribes:
+      node_type: ScanRun
+      predicate: "n.status = 'completed'"
+    command:
+      bin: delta-intel
+      args:
+        - "--run-id"
+        - "{{.Node.id}}"
+        - "--state-dir"
+        - "{{.Config.output_dir}}/delta"
+        - "--check"
+        - "surface-regression"
+        - "--json"
+      timeout: 30s
+      retries: 1
+    concurrency: 1
     enabled: false

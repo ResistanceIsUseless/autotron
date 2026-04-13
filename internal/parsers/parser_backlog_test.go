@@ -104,3 +104,27 @@ func TestMailPostureJSONParser_Basic(t *testing.T) {
 		t.Fatalf("expected 1 finding, got %d", len(out.Findings))
 	}
 }
+
+func TestMobileArtifactJSONParser_Basic(t *testing.T) {
+	p := &mobileArtifactJSONParser{}
+	trigger := graph.Node{Type: graph.NodeURL, PrimaryKey: "https://cdn.example.com/app.apk", Props: map[string]any{"url": "https://cdn.example.com/app.apk"}}
+	out, err := p.Parse(context.Background(), trigger, strings.NewReader(`{"artifact_url":"https://cdn.example.com/app.apk","artifact_type":"apk","endpoint_url":"https://api.example.com/v1/users","method":"GET","path":"/v1/users","finding":"mobile-endpoint-discovered","severity":"low","details":"candidate"}`), strings.NewReader(""))
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if len(out.Nodes) == 0 || len(out.Findings) == 0 {
+		t.Fatalf("expected endpoint + finding, got nodes=%d findings=%d", len(out.Nodes), len(out.Findings))
+	}
+}
+
+func TestDeltaReportJSONParser_Basic(t *testing.T) {
+	p := &deltaReportJSONParser{}
+	trigger := graph.Node{Type: graph.NodeScanRun, PrimaryKey: "run-2", Props: map[string]any{"id": "run-2"}}
+	out, err := p.Parse(context.Background(), trigger, strings.NewReader(`{"type":"delta-new-findings","severity":"high","details":"findings grew"}`), strings.NewReader(""))
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if len(out.Findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(out.Findings))
+	}
+}
