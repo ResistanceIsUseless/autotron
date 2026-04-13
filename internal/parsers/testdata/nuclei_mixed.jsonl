@@ -1,0 +1,2 @@
+{"template-id":"CVE-2023-9999","info":{"name":"Test CVE","tags":["cve"],"severity":"high","classification":{"cve-id":["CVE-2023-9999"],"cwe-id":["CWE-79"],"cvss-score":8.8}},"type":"http","host":"https://api.example.com","matched-at":"https://api.example.com/login"}
+{not-json}

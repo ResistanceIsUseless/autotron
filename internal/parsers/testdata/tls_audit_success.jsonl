@@ -1,0 +1,1 @@
+{"host":"api.example.com","port":"443","tls_version":"TLS1.0","cipher":"RC4-SHA","subject_cn":"api.example.com","issuer_cn":"api.example.com","subject_an":["api.example.com","*.example.com"],"self_signed":true}

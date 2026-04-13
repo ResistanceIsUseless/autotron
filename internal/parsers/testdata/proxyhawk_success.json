@@ -1,0 +1,1 @@
+{"url":"https://api.example.com","findings":[{"type":"ssrf","param":"next","payload":"http://169.254.169.254"},{"type":"open-redirect","param":"redirect","severity":"medium","confidence":"confirmed"}]}

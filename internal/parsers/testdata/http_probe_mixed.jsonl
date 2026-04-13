@@ -1,0 +1,2 @@
+{"url":"https://api.example.com","status_code":200,"content_length":1234,"content_type":"text/html","title":"Home","scheme":"https","webserver":"nginx","tech":["nginx","react"],"port":"443","a":["1.2.3.4"],"final_url":"https://api.example.com/home"}
+{not-json}

@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<nmaprun>
+  <host>
+    <address addr="1.2.3.4" addrtype="ipv4"/>
+    <ports>
+      <port protocol="tcp" portid="443">
+        <state state="open"/>
+        <service name="https" product="nginx" version="1.25" tunnel="ssl"/>
+        <script id="ssl-cert" output="subject=CN=api.example.com"/>
+      </port>
+    </ports>
+    <hostnames>
+      <hostname name="api.example.com" type="user"/>
+    </hostnames>
+  </host>
+</nmaprun>

@@ -1,0 +1,3 @@
+{"host":"api.example.com","a":["1.2.3.4"],"cname":["edge.example.net"],"status_code":"NOERROR"}
+api.example.com A 1.2.3.4
+{bad-json}
