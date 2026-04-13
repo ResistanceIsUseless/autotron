@@ -41,6 +41,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/jsfiles", s.handleJSFiles)
 	mux.HandleFunc("/api/top-findings", s.handleTopFindings)
 	mux.HandleFunc("/api/jsrecon/monitor", s.handleMonitorAdd)
+	mux.HandleFunc("/api/jsrecon/monitor/check", s.handleMonitorCheck)
 	mux.HandleFunc("/api/jsrecon/monitor/list", s.handleMonitorList)
 	mux.HandleFunc("/api/jsrecon/monitor/changes", s.handleMonitorChanges)
 	mux.HandleFunc("/api/jsrecon/analyze", s.handleAnalyzeNow)
@@ -188,7 +189,11 @@ func (s *Server) handleJSReconHealth(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMonitorList(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, s.jsreconBase+"/api/monitor", nil)
+	url := s.jsreconBase + "/api/monitor"
+	if q := r.URL.RawQuery; strings.TrimSpace(q) != "" {
+		url += "?" + q
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	resp, err := s.client.Do(req)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
@@ -210,7 +215,11 @@ func (s *Server) handleMonitorList(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMonitorChanges(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, s.jsreconBase+"/api/monitor/changes", nil)
+	url := s.jsreconBase + "/api/monitor/changes"
+	if q := r.URL.RawQuery; strings.TrimSpace(q) != "" {
+		url += "?" + q
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	resp, err := s.client.Do(req)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
@@ -227,6 +236,50 @@ func (s *Server) handleMonitorChanges(w http.ResponseWriter, r *http.Request) {
 		out = map[string]any{"raw": string(body)}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleMonitorCheck(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+
+	var req struct {
+		ID int `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid json body"})
+		return
+	}
+	if req.ID <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "id must be > 0"})
+		return
+	}
+
+	upstreamURL := fmt.Sprintf("%s/api/monitor/%d/check", s.jsreconBase, req.ID)
+	upstreamReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, upstreamURL, nil)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+
+	resp, err := s.client.Do(upstreamReq)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": fmt.Sprintf("jsrecon unavailable: %v", err)})
+		return
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": string(body)})
+		return
+	}
+
+	var out any
+	if err := json.Unmarshal(body, &out); err != nil {
+		out = map[string]any{"raw": string(body)}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "jsrecon": out})
 }
 
 func (s *Server) handleAnalyzeNow(w http.ResponseWriter, r *http.Request) {

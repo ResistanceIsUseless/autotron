@@ -99,10 +99,29 @@ const indexHTML = `<!doctype html>
 
     <div class="card" style="margin-top: 14px;">
       <strong>Recent Change Events</strong>
+      <div class="toolbar" style="margin-top: 8px; margin-bottom: 8px;">
+        <label class="tiny">Search <input id="changeSearch" placeholder="url,label,summary" style="min-width: 220px;" /></label>
+        <label class="tiny">Since <input id="changeSince" placeholder="2026-04-12 00:00:00" style="min-width: 180px;" /></label>
+        <label class="tiny">Limit
+          <select id="changeLimit">
+            <option value="20">20</option>
+            <option value="50" selected>50</option>
+            <option value="100">100</option>
+          </select>
+        </label>
+        <button class="secondary" onclick="applyChangeFilters()">Apply</button>
+      </div>
       <table style="margin-top:8px;">
         <thead><tr><th>ID</th><th>URL</th><th>Summary</th><th>When</th></tr></thead>
         <tbody id="changeRows"></tbody>
       </table>
+      <div class="toolbar" style="margin-top: 8px; justify-content: space-between;">
+        <span class="tiny muted" id="changeMeta">-</span>
+        <div>
+          <button class="secondary" onclick="prevChanges()">Prev</button>
+          <button class="secondary" onclick="nextChanges()">Next</button>
+        </div>
+      </div>
     </div>
 
     <div class="card" style="margin-top: 14px;">
@@ -144,6 +163,8 @@ const indexHTML = `<!doctype html>
 
     let jsItems = [];
     let monitoredSet = new Set();
+    let monitorItems = [];
+    let changePage = { limit: 50, offset: 0, has_more: false };
 
     async function addMonitor(url) {
       const label = prompt('Monitor label (optional):', 'asm-js');
@@ -204,6 +225,21 @@ const indexHTML = `<!doctype html>
       renderJSFiles();
     }
 
+    async function runMonitorCheck(id) {
+      const data = await j('/api/jsrecon/monitor/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id })
+      });
+      if (data.ok) {
+        const s = data.jsrecon && data.jsrecon.status ? data.jsrecon.status : 'unknown';
+        alert('Monitor check status: ' + s);
+        await Promise.all([loadMonitorList(), loadChanges()]);
+      } else {
+        alert('Monitor check failed: ' + JSON.stringify(data));
+      }
+    }
+
     async function loadJSFiles() {
       const data = await j('/api/jsfiles?limit=200');
       jsItems = data.items || [];
@@ -240,22 +276,52 @@ const indexHTML = `<!doctype html>
     }
 
     async function loadMonitorList() {
-      const data = await j('/api/jsrecon/monitor/list');
+      const data = await j('/api/jsrecon/monitor/list?limit=200');
       const rows = document.getElementById('monitorRows');
       const items = data.monitored_urls || [];
+      monitorItems = items;
       monitoredSet = new Set(items.map(m => String(m.url || '')));
       rows.innerHTML = items.map(m =>
-        '<tr><td>' + esc(m.label || '') + '</td><td class="tiny">' + esc(m.url) + '</td><td>' + esc(m.status || '') + '</td><td>' + esc(m.consecutive_errors || 0) + '</td><td class="tiny">' + esc(m.last_checked_at || '') + '</td></tr>'
+        '<tr><td>' + esc(m.label || '') + '</td><td class="tiny">' + esc(m.url) + '</td><td>' + esc(m.status || '') + '</td><td>' + esc(m.consecutive_errors || 0) + '</td><td class="tiny">' + esc(m.last_checked_at || '') + '<br/><button class="secondary" onclick="runMonitorCheck(' + Number(m.id || 0) + ')">Check now</button></td></tr>'
       ).join('');
     }
 
     async function loadChanges() {
-      const data = await j('/api/jsrecon/monitor/changes');
+      const search = encodeURIComponent((document.getElementById('changeSearch').value || '').trim());
+      const since = encodeURIComponent((document.getElementById('changeSince').value || '').trim());
+      const limit = Number(document.getElementById('changeLimit').value || 50);
+      changePage.limit = limit;
+      const q = '?limit=' + limit + '&offset=' + changePage.offset + (search ? '&search=' + search : '') + (since ? '&since=' + since : '');
+      const data = await j('/api/jsrecon/monitor/changes' + q);
       const rows = document.getElementById('changeRows');
       const items = data.change_events || data.items || [];
       rows.innerHTML = items.slice(0, 20).map(e =>
         '<tr><td>' + esc(e.id) + '</td><td class="tiny">' + esc(e.url || '') + '</td><td class="tiny">' + esc(e.summary || '') + '</td><td class="tiny">' + esc(e.created_at || '') + '</td></tr>'
       ).join('');
+
+      if (data.pagination) {
+        changePage.has_more = !!data.pagination.has_more;
+        changePage.offset = Number(data.pagination.offset || 0);
+      } else {
+        changePage.has_more = items.length === limit;
+      }
+      document.getElementById('changeMeta').textContent = 'offset=' + changePage.offset + ' limit=' + limit + ' count=' + items.length + ' has_more=' + changePage.has_more;
+    }
+
+    function applyChangeFilters() {
+      changePage.offset = 0;
+      loadChanges();
+    }
+
+    function prevChanges() {
+      changePage.offset = Math.max(0, changePage.offset - changePage.limit);
+      loadChanges();
+    }
+
+    function nextChanges() {
+      if (!changePage.has_more) return;
+      changePage.offset = changePage.offset + changePage.limit;
+      loadChanges();
     }
 
     async function loadFindings() {
