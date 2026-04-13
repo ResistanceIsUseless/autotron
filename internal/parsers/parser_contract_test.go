@@ -306,7 +306,7 @@ func TestSubscopeJSONParser_ProgressPrefixAndNoJSONError(t *testing.T) {
 
 func TestJSReconJSONParser_FindingsShape(t *testing.T) {
 	p := &jsreconJSONParser{}
-	trigger := graph.Node{Type: graph.NodeJSFile, PrimaryKey: "https://cdn.campuscloud.io/app.js", Props: map[string]any{"url": "https://app.campuscloud.io"}}
+	trigger := graph.Node{Type: graph.NodeJSFile, PrimaryKey: "https://cdn.example.com/app.js", Props: map[string]any{"url": "https://app.example.com"}}
 
 	stdout := fixture(t, "jsrecon_findings.json")
 	result, err := p.Parse(context.Background(), trigger, strings.NewReader(stdout), strings.NewReader(""))

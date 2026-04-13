@@ -610,7 +610,7 @@ func (c *Client) SeedDomain(ctx context.Context, fqdn string, scanRunID string) 
 
 // HasInScopeAncestor checks whether the given subdomain FQDN is reachable
 // via a CNAME chain from any in-scope subdomain. This is used to propagate
-// scope through CNAME chains: if campuscloud.io CNAMEs to azure.com which
+// scope through CNAME chains: if app.example.com CNAMEs to edge.vendor.net which
 // resolves to an IP, that IP should be in-scope even though the azure.com
 // intermediary is not.
 func (c *Client) HasInScopeAncestor(ctx context.Context, fqdn string) (bool, error) {

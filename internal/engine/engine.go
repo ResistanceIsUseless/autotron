@@ -431,7 +431,7 @@ func (e *Engine) dispatchJob(ctx context.Context, enricher config.EnricherDef, w
 	// discovered by resolving an in-scope subdomain inherits that scope).
 	// For CNAME chains, check whether the trigger node has an in-scope
 	// ancestor even if the trigger itself is out of scope (e.g.
-	// campuscloud.io → CNAME → azure.com → RESOLVES_TO → IP).
+	// app.example.com → CNAME → edge.vendor.net → RESOLVES_TO → IP).
 	triggerInScope := false
 	if v, ok := node.Props["in_scope"]; ok {
 		if b, ok := v.(bool); ok {

@@ -8,7 +8,7 @@ Build: `go build ./...` clean, `go vet ./...` clean, `asm validate` reports 0 er
 - **52 enrichers loaded** (18 enabled, 34 disabled/stubbed)
 - **Pipeline confirmed working**: Domain → Subdomain (subfinder) → DNS (dnsx) → IP → Port Scan (naabu) → nmap_http_scripts / nmap_ssl_enum / tlsx_cert / httpx_probe all triggering correctly
 
-## Latest Scan Results (campuscloud.io)
+## Latest Scan Results (example.com)
 
 Neo4j graph state after 2 interrupted runs (bash timeout, not tool failure):
 - **208 Subdomain** nodes (116 from subfinder + CNAME targets from dnsx)
@@ -104,10 +104,10 @@ Neo4j graph state after 2 interrupted runs (bash timeout, not tool failure):
 
 ```bash
 # Full scan (resumable — safe to re-run)
-./asm scan -c configs/asm.yaml -e configs/enrichers.yaml -d campuscloud.io
+./asm scan -c configs/asm.yaml -e configs/enrichers.yaml -d example.com
 
 # Background (no timeout)
-nohup ./asm scan -c configs/asm.yaml -e configs/enrichers.yaml -d campuscloud.io > scan.log 2>&1 &
+nohup ./asm scan -c configs/asm.yaml -e configs/enrichers.yaml -d example.com > scan.log 2>&1 &
 
 # Check Neo4j state
 docker exec neo4j-test cypher-shell -u neo4j -p changeme "MATCH (n) RETURN labels(n)[0] AS label, count(n) ORDER BY count(n) DESC"

@@ -4,18 +4,18 @@ Use this structure for host-level recon and vulnerability reporting.
 
 ---
 
-### exchange-alpha.campuscloud.io (203.0.113.45)
+### exchange-alpha.example.com (203.0.113.45)
 
 **DNS**
 - A -> 203.0.113.45
 - AAAA -> 2001:db8::45
-- CNAME -> exchange-alpha.o365.campuscloud.io
-- PTR -> mail-edge-01.campuscloud.io
-- Also resolves: exchange.campuscloud.io, autodiscover.campuscloud.io
+- CNAME -> exchange-alpha.o365.example.com
+- PTR -> mail-edge-01.example.com
+- Also resolves: exchange.example.com, autodiscover.example.com
 
 **Open Ports**
 - 80/tcp - http - nginx 1.24.0 (redirects -> 443)
-- 443/tcp - https - nginx 1.24.0 (TLS 1.2/1.3, cert CN=*.campuscloud.io, expires 2026-11-14)
+- 443/tcp - https - nginx 1.24.0 (TLS 1.2/1.3, cert CN=*.example.com, expires 2026-11-14)
 - 25/tcp - smtp - Exchange 2019 CU13
 - 587/tcp - submission - Exchange 2019 CU13
 - 993/tcp - imaps - Exchange 2019 CU13
@@ -44,7 +44,7 @@ Use this structure for host-level recon and vulnerability reporting.
 HTTP/1.1 200 OK
 Server: Kestrel
 X-Powered-By: ASP.NET Core 6.0
-X-Internal-Node: mbx-ic-03.corp.campuscloud.local
+X-Internal-Node: mbx-ic-03.corp.example.local
 X-Request-Id: 7f3a1c88-2e44-4a9b-9d21-b0c1e6f2d111
 X-Debug-Build: exchange-health-probe-v1.4.2-DEBUG
 Access-Control-Allow-Origin: *
@@ -53,7 +53,7 @@ Content-Type: application/json
 ```
 
 **Observations**
-- `X-Internal-Node` leaks internal hostname + AD domain (`corp.campuscloud.local`).
+- `X-Internal-Node` leaks internal hostname + AD domain (`corp.example.local`).
 - `X-Debug-Build` indicates a debug build running in production.
 - `Access-Control-Allow-Origin: *` on an authenticated host is a CORS concern.
 - `Server: Kestrel` confirms this path bypasses the nginx fronting other routes, suggesting a direct `proxy_pass` to an internal .NET service.
@@ -76,17 +76,17 @@ Content-Type: application/json
 
 ```bash
 # Confirm host still live
-httpx -u https://exchange-alpha.campuscloud.io -title -tech-detect -status-code
+httpx -u https://exchange-alpha.example.com -title -tech-detect -status-code
 
 # Re-probe the unique-header path
-curl -skI https://exchange-alpha.campuscloud.io/api/v2/health
+curl -skI https://exchange-alpha.example.com/api/v2/health
 
 # Re-crawl for new paths
-katana -u https://exchange-alpha.campuscloud.io -jc -d 3 -silent
+katana -u https://exchange-alpha.example.com -jc -d 3 -silent
 
 # Re-scan for vulns
-nuclei -u https://exchange-alpha.campuscloud.io -severity medium,high,critical
+nuclei -u https://exchange-alpha.example.com -severity medium,high,critical
 
 # Port re-verification
-nmap -Pn -sV -p25,80,443,587,993 exchange-alpha.campuscloud.io
+nmap -Pn -sV -p25,80,443,587,993 exchange-alpha.example.com
 ```

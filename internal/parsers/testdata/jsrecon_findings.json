@@ -22,7 +22,7 @@
       "context": "const token = 'ghp_...';",
       "metadata": {
         "entropy": 4.3,
-        "host": "api.campuscloud.io"
+        "host": "api.example.com"
       }
     },
     {

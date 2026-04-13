@@ -254,7 +254,7 @@ enrichers:
       predicate: >
         n.in_scope = true AND svc.product IN ['http', 'https']
     command:
-      bin: /Users/matthew/.pdtm/go/bin/httpx
+      bin: httpx
       args:
         - "-u"
         - "{{.Node.fqdn}}"

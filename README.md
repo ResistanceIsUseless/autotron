@@ -216,6 +216,7 @@ go run ./cmd/asm validate
 - `docs/cloud-bucket-check-setup.md`
 - `docs/mail-posture-setup.md`
 - `docs/web-advanced-setup.md`
+- `docs/ai-integration-next-phase.md`
 
 ## Safety and usage
 
