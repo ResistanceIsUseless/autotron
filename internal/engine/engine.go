@@ -64,8 +64,55 @@ func NewEngine(
 // Run executes the enrichment loop. It seeds the graph with the given domains,
 // then dispatches enrichers in iterations until no new work is found or the
 // budget is exhausted.
-func (e *Engine) Run(ctx context.Context, domains []string) error {
+func (e *Engine) Run(ctx context.Context, domains []string) (err error) {
 	scanRunID := uuid.New().String()
+	startedAt := time.Now().UTC()
+	target := strings.Join(domains, ",")
+
+	if _, upsertErr := e.graphClient.UpsertNode(ctx, graph.Node{
+		Type:       graph.NodeScanRun,
+		PrimaryKey: scanRunID,
+		Props: map[string]any{
+			"id":           scanRunID,
+			"target":       target,
+			"domains":      domains,
+			"domain_count": len(domains),
+			"status":       "running",
+			"started_at":   startedAt.Format(time.RFC3339),
+		},
+	}); upsertErr != nil {
+		e.logger.Warn("failed to persist scan run start", "scan_run_id", scanRunID, "error", upsertErr)
+	}
+
+	defer func() {
+		status := "completed"
+		if err != nil {
+			if ctx.Err() != nil {
+				status = "cancelled"
+			} else {
+				status = "failed"
+			}
+		}
+
+		if _, upsertErr := e.graphClient.UpsertNode(context.Background(), graph.Node{
+			Type:       graph.NodeScanRun,
+			PrimaryKey: scanRunID,
+			Props: map[string]any{
+				"id":            scanRunID,
+				"target":        target,
+				"domains":       domains,
+				"domain_count":  len(domains),
+				"status":        status,
+				"started_at":    startedAt.Format(time.RFC3339),
+				"completed_at":  time.Now().UTC().Format(time.RFC3339),
+				"duration_ms":   time.Since(startedAt).Milliseconds(),
+				"error_message": errorString(err),
+			},
+		}); upsertErr != nil {
+			e.logger.Warn("failed to persist scan run completion", "scan_run_id", scanRunID, "error", upsertErr)
+		}
+	}()
+
 	e.logger.Info("starting scan",
 		"scan_run_id", scanRunID,
 		"domains", domains,
@@ -86,9 +133,9 @@ func (e *Engine) Run(ctx context.Context, domains []string) error {
 			return ctx.Err()
 		}
 
-		dispatched, err := e.runIteration(ctx, iteration, scanRunID)
-		if err != nil {
-			return fmt.Errorf("iteration %d: %w", iteration, err)
+		dispatched, iterErr := e.runIteration(ctx, iteration, scanRunID)
+		if iterErr != nil {
+			return fmt.Errorf("iteration %d: %w", iteration, iterErr)
 		}
 
 		e.logger.Info("iteration complete",
@@ -108,6 +155,13 @@ func (e *Engine) Run(ctx context.Context, domains []string) error {
 
 	e.logger.Info("scan complete", "scan_run_id", scanRunID)
 	return nil
+}
+
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 // runIteration runs a single pass over all enrichers, dispatching jobs for

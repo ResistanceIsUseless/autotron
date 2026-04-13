@@ -52,6 +52,7 @@ type BudgetConfig struct {
 type ScanConfig struct {
 	ResolversFile string `yaml:"resolvers_file"`
 	OutputDir     string `yaml:"output_dir"`
+	JSReconBase   string `yaml:"jsrecon_base"`
 }
 
 // EnricherDef is a single tool invocation definition from enrichers.yaml.
@@ -113,6 +114,9 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if cfg.Budget.GlobalWorkers == 0 {
 		cfg.Budget.GlobalWorkers = runtime.NumCPU() * 2
+	}
+	if cfg.Scan.JSReconBase == "" {
+		cfg.Scan.JSReconBase = "http://localhost:37232"
 	}
 
 	// Parse CIDRs for fast scope checking.

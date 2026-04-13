@@ -84,6 +84,10 @@ func webUICmd() *cobra.Command {
 			}
 			defer graphClient.Close(ctx)
 
+			if strings.TrimSpace(jsreconBase) == "" {
+				jsreconBase = cfg.Scan.JSReconBase
+			}
+
 			srv := webui.NewServer(graphClient, logger, jsreconBase)
 			httpServer := &http.Server{
 				Addr:    addr,
@@ -113,7 +117,7 @@ func webUICmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&addr, "addr", ":8090", "listen address")
-	cmd.Flags().StringVar(&jsreconBase, "jsrecon", "http://localhost:37232", "jsRecon base URL")
+	cmd.Flags().StringVar(&jsreconBase, "jsrecon", "", "jsRecon base URL (defaults to scan.jsrecon_base from config)")
 	return cmd
 }
 

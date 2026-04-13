@@ -931,7 +931,14 @@ enrichers:
       predicate: "n.in_scope = true"
     command:
       bin: cloud-bucket-check
-      args: ["--provider", "aws", "--domain", "{{.Node.fqdn}}", "--json"]
+      args:
+        - "--provider"
+        - "aws"
+        - "--domain"
+        - "{{.Node.fqdn}}"
+        - "--json"
+        - "--max-candidates"
+        - "8"
       timeout: 5m
       retries: 1
     concurrency: 2
@@ -944,7 +951,34 @@ enrichers:
       predicate: "n.in_scope = true"
     command:
       bin: cloud-bucket-check
-      args: ["--provider", "gcp", "--domain", "{{.Node.fqdn}}", "--json"]
+      args:
+        - "--provider"
+        - "gcp"
+        - "--domain"
+        - "{{.Node.fqdn}}"
+        - "--json"
+        - "--max-candidates"
+        - "8"
+      timeout: 5m
+      retries: 1
+    concurrency: 2
+    enabled: false
+
+  - name: azure_blob_enum
+    parser: cloud_bucket_json
+    subscribes:
+      node_type: Domain
+      predicate: "n.in_scope = true"
+    command:
+      bin: cloud-bucket-check
+      args:
+        - "--provider"
+        - "azure"
+        - "--domain"
+        - "{{.Node.fqdn}}"
+        - "--json"
+        - "--max-candidates"
+        - "8"
       timeout: 5m
       retries: 1
     concurrency: 2
@@ -1021,7 +1055,12 @@ enrichers:
       predicate: "n.status_code = 200"
     command:
       bin: auth-surface
-      args: ["--url", "{{.Node.url}}", "--mode", "oidc", "--json"]
+      args:
+        - "--url"
+        - "{{.Node.url}}"
+        - "--mode"
+        - "oidc"
+        - "--json"
       timeout: 5m
       retries: 1
     concurrency: 4
@@ -1036,7 +1075,48 @@ enrichers:
       predicate: "n.status_code = 200"
     command:
       bin: web-advanced
-      args: ["--url", "{{.Node.url}}", "--check", "desync", "--json"]
+      args:
+        - "--url"
+        - "{{.Node.url}}"
+        - "--check"
+        - "desync"
+        - "--json"
+      timeout: 10m
+      retries: 1
+    concurrency: 2
+    enabled: false
+
+  - name: cache_poison_probe
+    parser: http_advanced_vuln_json
+    subscribes:
+      node_type: URL
+      predicate: "n.status_code = 200"
+    command:
+      bin: web-advanced
+      args:
+        - "--url"
+        - "{{.Node.url}}"
+        - "--check"
+        - "cache-poison"
+        - "--json"
+      timeout: 10m
+      retries: 1
+    concurrency: 2
+    enabled: false
+
+  - name: waf_diff_probe
+    parser: http_advanced_vuln_json
+    subscribes:
+      node_type: URL
+      predicate: "n.status_code = 200"
+    command:
+      bin: web-advanced
+      args:
+        - "--url"
+        - "{{.Node.url}}"
+        - "--check"
+        - "waf-diff"
+        - "--json"
       timeout: 10m
       retries: 1
     concurrency: 2
@@ -1051,7 +1131,10 @@ enrichers:
       predicate: "n.in_scope = true"
     command:
       bin: mail-posture
-      args: ["--domain", "{{.Node.fqdn}}", "--json"]
+      args:
+        - "--domain"
+        - "{{.Node.fqdn}}"
+        - "--json"
       timeout: 5m
       retries: 1
     concurrency: 2
