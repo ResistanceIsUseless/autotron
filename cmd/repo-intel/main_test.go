@@ -20,3 +20,19 @@ func TestClassifyRepoSeverity(t *testing.T) {
 		t.Fatalf("expected low fallback, got %s", got)
 	}
 }
+
+func TestLikelySensitivePath(t *testing.T) {
+	if !likelySensitivePath("configs/.env.production") {
+		t.Fatal("expected sensitive path detection true")
+	}
+	if likelySensitivePath("assets/logo.png") {
+		t.Fatal("expected non-sensitive path detection false")
+	}
+}
+
+func TestQueryPatternsForType(t *testing.T) {
+	secret := queryPatternsForType("example.com", "repo-secret-leak")
+	if len(secret) == 0 {
+		t.Fatal("expected non-empty secret pattern list")
+	}
+}

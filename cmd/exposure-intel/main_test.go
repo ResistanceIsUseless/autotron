@@ -37,3 +37,12 @@ func TestMapKeysSorted(t *testing.T) {
 		t.Fatalf("expected sorted keys, got %#v", out)
 	}
 }
+
+func TestClassifyServiceFromFOFA(t *testing.T) {
+	if got := classifyServiceFromFOFA(443, "https", "nginx", "title", "host"); got != "https" {
+		t.Fatalf("expected https service, got %s", got)
+	}
+	if got := classifyServiceFromFOFA(22, "tcp", "", "", ""); got != "ssh" {
+		t.Fatalf("expected ssh fallback service, got %s", got)
+	}
+}

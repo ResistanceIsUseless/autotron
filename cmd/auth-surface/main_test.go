@@ -59,3 +59,12 @@ func TestSAMLProbeMetadata(t *testing.T) {
 		t.Fatal("expected saml metadata records")
 	}
 }
+
+func TestSameNormalizedURL(t *testing.T) {
+	if !sameNormalizedURL("https://id.example.com/cb#frag", "https://id.example.com/cb") {
+		t.Fatal("expected URLs to match after fragment normalization")
+	}
+	if sameNormalizedURL("https://id.example.com/a", "https://id.example.com/b") {
+		t.Fatal("expected different URLs to not match")
+	}
+}

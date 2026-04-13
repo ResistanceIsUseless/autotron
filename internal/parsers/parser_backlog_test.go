@@ -128,3 +128,11 @@ func TestDeltaReportJSONParser_Basic(t *testing.T) {
 		t.Fatalf("expected 1 finding, got %d", len(out.Findings))
 	}
 }
+
+func TestBacklogParsersRegistered(t *testing.T) {
+	for _, name := range []string{"search_dork_json", "exposure_passive_json", "cloud_bucket_json", "repo_leak_json", "api_surface_json", "auth_surface_json", "http_advanced_vuln_json", "mail_posture_json", "mobile_artifact_json", "delta_report_json", "visual_cluster_json"} {
+		if _, err := Get(name); err != nil {
+			t.Fatalf("expected parser %s to be registered: %v", name, err)
+		}
+	}
+}

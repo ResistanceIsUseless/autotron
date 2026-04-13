@@ -35,6 +35,12 @@ type record struct {
 	Details    string   `json:"details,omitempty"`
 }
 
+type basicAuthzResult struct {
+	status  int
+	headers http.Header
+	body    string
+}
+
 func main() {
 	cfg := parseFlags()
 	if err := run(cfg); err != nil {
@@ -46,7 +52,7 @@ func main() {
 func parseFlags() config {
 	var cfg config
 	flag.StringVar(&cfg.baseURL, "url", "", "target base URL")
-	flag.StringVar(&cfg.mode, "mode", "openapi", "scan mode: openapi|graphql")
+	flag.StringVar(&cfg.mode, "mode", "openapi", "scan mode: openapi|graphql|authz")
 	flag.BoolVar(&cfg.jsonOutput, "json", false, "emit JSONL output")
 	flag.IntVar(&cfg.maxEndpoints, "max-endpoints", 200, "max discovered endpoints to emit")
 	flag.DurationVar(&cfg.timeout, "timeout", 20*time.Second, "request timeout")
@@ -66,8 +72,8 @@ func run(cfg config) error {
 		return errors.New("--max-endpoints must be > 0")
 	}
 	mode := strings.ToLower(strings.TrimSpace(cfg.mode))
-	if mode != "openapi" && mode != "graphql" {
-		return fmt.Errorf("unsupported --mode %q (supported: openapi|graphql)", cfg.mode)
+	if mode != "openapi" && mode != "graphql" && mode != "authz" {
+		return fmt.Errorf("unsupported --mode %q (supported: openapi|graphql|authz)", cfg.mode)
 	}
 
 	ctx := context.Background()
@@ -76,8 +82,10 @@ func run(cfg config) error {
 	var records []record
 	if mode == "openapi" {
 		records, err = openapiProbe(ctx, client, u, cfg.maxEndpoints)
-	} else {
+	} else if mode == "graphql" {
 		records, err = graphqlProbe(ctx, client, u)
+	} else {
+		records, err = authzProbe(ctx, client, u, cfg.maxEndpoints)
 	}
 	if err != nil {
 		return err
@@ -192,6 +200,111 @@ func graphqlProbe(ctx context.Context, client *http.Client, base *url.URL) ([]re
 	}
 
 	return out, nil
+}
+
+func authzProbe(ctx context.Context, client *http.Client, base *url.URL, maxEndpoints int) ([]record, error) {
+	paths := []string{
+		"/api",
+		"/api/v1",
+		"/v1",
+		"/graphql",
+		"/users",
+		"/admin",
+		"/me",
+		"/profile",
+		"/account",
+	}
+
+	var out []record
+	seen := make(map[string]bool)
+	for _, p := range paths {
+		full := joinURL(base, p)
+		result, err := authzCheckEndpoint(ctx, client, full)
+		if err != nil {
+			continue
+		}
+
+		targetPath := p
+		for _, rec := range toAuthzFindings(base.String(), targetPath, result) {
+			k := rec.Method + "|" + rec.Path + "|" + rec.Finding + "|" + rec.Details
+			if seen[k] {
+				continue
+			}
+			seen[k] = true
+			out = append(out, rec)
+			if len(out) >= maxEndpoints {
+				return out, nil
+			}
+		}
+	}
+
+	return out, nil
+}
+
+func authzCheckEndpoint(ctx context.Context, client *http.Client, endpoint string) (basicAuthzResult, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return basicAuthzResult{}, err
+	}
+	req.Header.Set("Accept", "application/json,*/*")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return basicAuthzResult{}, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+
+	return basicAuthzResult{status: resp.StatusCode, headers: resp.Header.Clone(), body: string(body)}, nil
+}
+
+func toAuthzFindings(baseURL, path string, r basicAuthzResult) []record {
+	var out []record
+	lb := strings.ToLower(r.body)
+
+	if r.status >= 200 && r.status < 300 {
+		out = append(out, record{
+			BaseURL:    baseURL,
+			Method:     "GET",
+			Path:       path,
+			Finding:    "bola-candidate",
+			Severity:   "medium",
+			Confidence: "tentative",
+			Details:    fmt.Sprintf("endpoint responded %d without explicit auth challenge", r.status),
+		})
+	}
+
+	if r.status == http.StatusForbidden || r.status == http.StatusUnauthorized {
+		return out
+	}
+
+	if strings.Contains(lb, "jwt") || strings.Contains(lb, "token") || strings.Contains(lb, "authorization") {
+		if r.status >= 200 && r.status < 300 {
+			out = append(out, record{
+				BaseURL:    baseURL,
+				Method:     "GET",
+				Path:       path,
+				Finding:    "api-authz-heuristic",
+				Severity:   "medium",
+				Confidence: "tentative",
+				Details:    "token/auth indicators observed in successful response",
+			})
+		}
+	}
+
+	if wa := strings.TrimSpace(r.headers.Get("WWW-Authenticate")); wa != "" {
+		out = append(out, record{
+			BaseURL:    baseURL,
+			Method:     "GET",
+			Path:       path,
+			Finding:    "auth-challenge-observed",
+			Severity:   "info",
+			Confidence: "firm",
+			Details:    "WWW-Authenticate present",
+		})
+	}
+
+	return out
 }
 
 func extractOpenAPIEndpoints(baseURL string, body []byte, max int) []record {

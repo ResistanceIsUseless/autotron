@@ -1,6 +1,6 @@
-# Auth Surface Setup (OIDC Discovery)
+# Auth Surface Setup (OIDC / OAuth / SAML)
 
-Autotron's `oidc_discovery` enricher uses the `auth-surface` helper.
+Autotron's `oidc_discovery`, `oauth_misconfig_probe`, and `saml_metadata_enum` enrichers use the `auth-surface` helper.
 
 ## What it checks
 
@@ -9,6 +9,8 @@ Autotron's `oidc_discovery` enricher uses the `auth-surface` helper.
 - `jwks_uri` presence and reachability.
 - JWKS JSON validity and empty-key conditions.
 - PKCE support sanity (`S256` presence when advertised methods exist).
+- OAuth metadata checks for endpoint host/scheme sanity and redirect-candidate heuristics.
+- SAML metadata exposure checks for signing/key descriptor/logout metadata hints.
 
 ## Build
 
@@ -20,6 +22,8 @@ go build -o auth-surface ./cmd/auth-surface
 
 ```bash
 ./auth-surface --url https://login.example.com --mode oidc --json
+./auth-surface --url https://login.example.com --mode oauth --json
+./auth-surface --url https://login.example.com --mode saml --json
 ```
 
 Expected output: JSONL records with fields:
@@ -30,6 +34,8 @@ Expected output: JSONL records with fields:
 In `configs/enrichers.yaml` set:
 
 - `name: oidc_discovery`
+- `name: oauth_misconfig_probe`
+- `name: saml_metadata_enum`
 - `enabled: true`
 
 Then run:

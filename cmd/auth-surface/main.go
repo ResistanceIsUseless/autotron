@@ -173,6 +173,17 @@ func oauthProbe(ctx context.Context, client *http.Client, target *url.URL) ([]ou
 		})
 	} else {
 		records = append(records, analyzeOAuthEndpointHost(target, oauthURL, "authorization_endpoint", doc.AuthorizationEndpoint)...)
+		if strings.TrimSpace(doc.TokenEndpoint) != "" {
+			if sameNormalizedURL(doc.AuthorizationEndpoint, doc.TokenEndpoint) {
+				records = append(records, outputRecord{
+					URL:        oauthURL,
+					Type:       "oauth-open-redirect-candidate",
+					Severity:   "medium",
+					Confidence: "tentative",
+					Details:    "authorization_endpoint equals token_endpoint",
+				})
+			}
+		}
 		if containsOpenRedirectSignal(doc.AuthorizationEndpoint) {
 			records = append(records, outputRecord{
 				URL:        oauthURL,
@@ -400,6 +411,17 @@ func containsOpenRedirectSignal(rawURL string) bool {
 		}
 	}
 	return false
+}
+
+func sameNormalizedURL(a, b string) bool {
+	ua, errA := url.Parse(strings.TrimSpace(a))
+	ub, errB := url.Parse(strings.TrimSpace(b))
+	if errA != nil || errB != nil {
+		return false
+	}
+	ua.Fragment = ""
+	ub.Fragment = ""
+	return strings.EqualFold(ua.String(), ub.String())
 }
 
 func joinURL(base *url.URL, p string) string {

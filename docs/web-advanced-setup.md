@@ -8,6 +8,12 @@ Autotron's advanced web class enrichers use `web-advanced`.
 - `cache-poison` -> emits `cache-poisoning-candidate` on marker/cache anomalies.
 - `waf-diff` -> emits `waf-bypass-diff` on baseline/probe response profile drift.
 
+Additional enrichers currently mapped to these checks:
+
+- `ssrf_gadget_discovery` (heuristic, mapped through `waf-diff`)
+- `idor_candidate_mapper` (heuristic, mapped through `cache-poison`)
+- `csrf_policy_audit` (heuristic, mapped through `desync`)
+
 ## Build helper
 
 ```bash
@@ -29,6 +35,9 @@ In `configs/enrichers.yaml`, enable any of:
 - `http_desync_probe`
 - `cache_poison_probe`
 - `waf_diff_probe`
+- `ssrf_gadget_discovery`
+- `idor_candidate_mapper`
+- `csrf_policy_audit`
 
 Then run:
 

@@ -29,6 +29,13 @@ func TestJoinURL(t *testing.T) {
 	}
 }
 
+func TestToAuthzFindings(t *testing.T) {
+	recs := toAuthzFindings("https://api.example.com", "/admin", basicAuthzResult{status: 200, body: `{"token":"present"}`})
+	if len(recs) == 0 {
+		t.Fatal("expected authz heuristic findings")
+	}
+}
+
 func mustParseURL(t *testing.T, raw string) *url.URL {
 	t.Helper()
 	u, err := url.Parse(raw)

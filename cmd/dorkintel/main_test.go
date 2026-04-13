@@ -25,3 +25,10 @@ func TestRunValidationMissingDomain(t *testing.T) {
 		t.Fatal("expected domain required error")
 	}
 }
+
+func TestStripXMLNoise(t *testing.T) {
+	raw := "  foo\n\tbar   baz  "
+	if got := stripXMLNoise(raw); got != "foo bar baz" {
+		t.Fatalf("unexpected cleaned XML text: %q", got)
+	}
+}

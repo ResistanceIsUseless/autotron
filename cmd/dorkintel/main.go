@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -23,6 +25,8 @@ type config struct {
 	googleKey  string
 	googleCX   string
 	bingKey    string
+	yandexUser string
+	yandexKey  string
 }
 
 type dorkQuery struct {
@@ -70,6 +74,24 @@ type bingSearchResponse struct {
 	} `json:"error"`
 }
 
+type yandexSearchResponse struct {
+	Response struct {
+		Error   string `xml:"error"`
+		Results struct {
+			Grouping struct {
+				Groups []struct {
+					Doc struct {
+						URL      string   `xml:"url"`
+						Title    string   `xml:"title"`
+						Headline string   `xml:"headline"`
+						Passages []string `xml:"passages>passage"`
+					} `xml:"doc"`
+				} `xml:"group"`
+			} `xml:"grouping"`
+		} `xml:"results"`
+	} `xml:"response"`
+}
+
 func main() {
 	cfg := parseFlags()
 	if err := run(cfg); err != nil {
@@ -80,7 +102,7 @@ func main() {
 
 func parseFlags() config {
 	var cfg config
-	flag.StringVar(&cfg.engine, "engine", "google", "search engine provider (google)")
+	flag.StringVar(&cfg.engine, "engine", "google", "search engine provider (google|bing|yandex)")
 	flag.StringVar(&cfg.domain, "domain", "", "target domain to query")
 	flag.BoolVar(&cfg.jsonOutput, "json", false, "emit JSONL records")
 	flag.IntVar(&cfg.maxResults, "max-results", 30, "maximum records to emit")
@@ -89,6 +111,8 @@ func parseFlags() config {
 	flag.StringVar(&cfg.googleKey, "google-key", "", "Google CSE API key (or GOOGLE_CSE_API_KEY)")
 	flag.StringVar(&cfg.googleCX, "google-cx", "", "Google CSE CX identifier (or GOOGLE_CSE_CX)")
 	flag.StringVar(&cfg.bingKey, "bing-key", "", "Bing Search API key (or BING_SEARCH_API_KEY)")
+	flag.StringVar(&cfg.yandexUser, "yandex-user", "", "Yandex XML user login (or YANDEX_XML_USER)")
+	flag.StringVar(&cfg.yandexKey, "yandex-key", "", "Yandex XML API key (or YANDEX_XML_KEY)")
 	flag.Parse()
 	return cfg
 }
@@ -105,8 +129,8 @@ func run(cfg config) error {
 	}
 
 	engine := strings.ToLower(strings.TrimSpace(cfg.engine))
-	if engine != "google" && engine != "bing" {
-		return fmt.Errorf("unsupported --engine %q (supported: google, bing)", cfg.engine)
+	if engine != "google" && engine != "bing" && engine != "yandex" {
+		return fmt.Errorf("unsupported --engine %q (supported: google, bing, yandex)", cfg.engine)
 	}
 
 	googleKey := strings.TrimSpace(cfg.googleKey)
@@ -121,12 +145,23 @@ func run(cfg config) error {
 	if bingKey == "" {
 		bingKey = strings.TrimSpace(os.Getenv("BING_SEARCH_API_KEY"))
 	}
+	yandexUser := strings.TrimSpace(cfg.yandexUser)
+	if yandexUser == "" {
+		yandexUser = strings.TrimSpace(os.Getenv("YANDEX_XML_USER"))
+	}
+	yandexKey := strings.TrimSpace(cfg.yandexKey)
+	if yandexKey == "" {
+		yandexKey = strings.TrimSpace(os.Getenv("YANDEX_XML_KEY"))
+	}
 
 	if engine == "google" && (googleKey == "" || googleCX == "") {
 		return errors.New("missing Google CSE credentials (set GOOGLE_CSE_API_KEY and GOOGLE_CSE_CX)")
 	}
 	if engine == "bing" && bingKey == "" {
 		return errors.New("missing Bing Search API key (set BING_SEARCH_API_KEY)")
+	}
+	if engine == "yandex" && (yandexUser == "" || yandexKey == "") {
+		return errors.New("missing Yandex XML credentials (set YANDEX_XML_USER and YANDEX_XML_KEY)")
 	}
 
 	client := &http.Client{Timeout: cfg.timeout}
@@ -151,7 +186,7 @@ func run(cfg config) error {
 				num = 10
 			}
 
-			items, err := search(engine, ctx, client, googleKey, googleCX, bingKey, q.Query, start, num)
+			items, err := search(engine, ctx, client, googleKey, googleCX, bingKey, yandexUser, yandexKey, q.Query, start, num)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "%s query failed (%s): %v\n", engine, q.Query, err)
 				break
@@ -201,12 +236,14 @@ func run(cfg config) error {
 	return nil
 }
 
-func search(engine string, ctx context.Context, client *http.Client, googleKey, googleCX, bingKey, query string, start, num int) ([]searchItem, error) {
+func search(engine string, ctx context.Context, client *http.Client, googleKey, googleCX, bingKey, yandexUser, yandexKey, query string, start, num int) ([]searchItem, error) {
 	switch engine {
 	case "google":
 		return googleSearch(ctx, client, googleKey, googleCX, query, start, num)
 	case "bing":
 		return bingSearch(ctx, client, bingKey, query, start, num)
+	case "yandex":
+		return yandexSearch(ctx, client, yandexUser, yandexKey, query, start)
 	default:
 		return nil, fmt.Errorf("unsupported engine %q", engine)
 	}
@@ -313,4 +350,81 @@ func bingSearch(ctx context.Context, client *http.Client, key, query string, sta
 		items = append(items, searchItem{Title: it.Name, Link: it.URL, Snippet: it.Snippet})
 	}
 	return items, nil
+}
+
+func yandexSearch(ctx context.Context, client *http.Client, user, key, query string, start int) ([]searchItem, error) {
+	u, err := url.Parse("https://yandex.com/search/xml")
+	if err != nil {
+		return nil, err
+	}
+
+	page := 0
+	if start > 1 {
+		page = (start - 1) / 10
+	}
+
+	v := u.Query()
+	v.Set("user", user)
+	v.Set("key", key)
+	v.Set("query", query)
+	v.Set("l10n", "en")
+	v.Set("sortby", "rlv")
+	v.Set("filter", "none")
+	v.Set("maxpassages", "1")
+	v.Set("groupby", "attr=d.mode=deep.groups-on-page=10.docs-in-group=1")
+	v.Set("page", fmt.Sprintf("%d", page))
+	u.RawQuery = v.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("yandex api: %s", resp.Status)
+	}
+
+	var parsed yandexSearchResponse
+	if err := xml.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("decode yandex xml: %w", err)
+	}
+	if msg := strings.TrimSpace(parsed.Response.Error); msg != "" {
+		return nil, fmt.Errorf("yandex api: %s", msg)
+	}
+
+	items := make([]searchItem, 0, len(parsed.Response.Results.Grouping.Groups))
+	for _, g := range parsed.Response.Results.Grouping.Groups {
+		doc := g.Doc
+		link := strings.TrimSpace(doc.URL)
+		if link == "" {
+			continue
+		}
+		title := strings.TrimSpace(stripXMLNoise(doc.Title))
+		if title == "" {
+			title = strings.TrimSpace(stripXMLNoise(doc.Headline))
+		}
+		snippet := ""
+		if len(doc.Passages) > 0 {
+			snippet = strings.TrimSpace(stripXMLNoise(doc.Passages[0]))
+		}
+		items = append(items, searchItem{Title: title, Link: link, Snippet: snippet})
+	}
+
+	return items, nil
+}
+
+func stripXMLNoise(v string) string {
+	v = strings.ReplaceAll(v, "\n", " ")
+	v = strings.ReplaceAll(v, "\t", " ")
+	for strings.Contains(v, "  ") {
+		v = strings.ReplaceAll(v, "  ", " ")
+	}
+	return strings.TrimSpace(v)
 }

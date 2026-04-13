@@ -360,6 +360,24 @@ enrichers:
     concurrency: 8
     enabled: false  # gowitness not installed
 
+  - name: screenshot_cluster
+    parser: visual_cluster_json
+    subscribes:
+      node_type: URL
+      predicate: "n.status_code = 200 AND n.screenshot_path IS NOT NULL AND n.screenshot_path <> ''"
+    command:
+      bin: screenshot-cluster
+      args:
+        - "--url"
+        - "{{.Node.url}}"
+        - "--screenshot"
+        - "{{.Node.screenshot_path}}"
+        - "--json"
+      timeout: 2m
+      retries: 1
+    concurrency: 4
+    enabled: false
+
   # --- Parameter discovery ---
 
   - name: arjun_params
@@ -887,6 +905,28 @@ enrichers:
     concurrency: 2
     enabled: false
 
+  - name: yandex_dork_passive
+    parser: search_dork_json
+    subscribes:
+      node_type: Domain
+      predicate: "n.in_scope = true"
+    command:
+      bin: dorkintel
+      args:
+        - "--engine"
+        - "yandex"
+        - "--domain"
+        - "{{.Node.fqdn}}"
+        - "--json"
+        - "--max-results"
+        - "30"
+        - "--delay"
+        - "750ms"
+      timeout: 10m
+      retries: 1
+    concurrency: 2
+    enabled: false
+
   # --- Internet-wide passive exposure ---
 
   - name: shodan_host_passive
@@ -917,6 +957,26 @@ enrichers:
     command:
       bin: exposure-intel
       args: ["--provider", "censys", "--ip", "{{.Node.address}}", "--json"]
+      timeout: 3m
+      retries: 1
+    concurrency: 4
+    enabled: false
+
+  - name: fofa_host_passive
+    parser: exposure_passive_json
+    subscribes:
+      node_type: IP
+      predicate: "n.in_scope = true"
+    command:
+      bin: exposure-intel
+      args:
+        - "--provider"
+        - "fofa"
+        - "--ip"
+        - "{{.Node.address}}"
+        - "--json"
+        - "--max-services"
+        - "100"
       timeout: 3m
       retries: 1
     concurrency: 4
@@ -1006,6 +1066,26 @@ enrichers:
     concurrency: 2
     enabled: false
 
+  - name: gitlab_code_search_passive
+    parser: repo_leak_json
+    subscribes:
+      node_type: Domain
+      predicate: "n.in_scope = true"
+    command:
+      bin: repo-intel
+      args:
+        - "--provider"
+        - "gitlab"
+        - "--domain"
+        - "{{.Node.fqdn}}"
+        - "--json"
+        - "--max-results"
+        - "50"
+      timeout: 5m
+      retries: 1
+    concurrency: 2
+    enabled: false
+
   # --- API surface security ---
 
   - name: openapi_discovery
@@ -1041,6 +1121,26 @@ enrichers:
         - "--mode"
         - "graphql"
         - "--json"
+      timeout: 10m
+      retries: 1
+    concurrency: 4
+    enabled: false
+
+  - name: api_authz_heuristics
+    parser: api_surface_json
+    subscribes:
+      node_type: URL
+      predicate: "n.status_code = 200"
+    command:
+      bin: api-surface
+      args:
+        - "--url"
+        - "{{.Node.url}}"
+        - "--mode"
+        - "authz"
+        - "--json"
+        - "--max-endpoints"
+        - "50"
       timeout: 10m
       retries: 1
     concurrency: 4
