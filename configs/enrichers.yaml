@@ -1281,7 +1281,7 @@ enrichers:
     enabled: false
 
   - name: ssrf_gadget_discovery
-    parser: web_vuln_generic
+    parser: http_advanced_vuln_json
     subscribes:
       node_type: URL
       predicate: "n.status_code = 200"
@@ -1291,7 +1291,7 @@ enrichers:
         - "--url"
         - "{{.Node.url}}"
         - "--check"
-        - "csrf-audit"
+        - "ssrf-gadget"
         - "--json"
       timeout: 10m
       retries: 1

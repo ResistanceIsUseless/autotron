@@ -51,6 +51,28 @@ Optional modules (disabled by default, enable in stages):
 - Mobile and visual workflows: APK/IPA artifact endpoint extraction, screenshot clustering
 - Drift intelligence: delta new-exposure/new-findings/surface-regression checks
 
+### Suggested enablement profiles
+
+`passive-plus` (low-noise, lowest risk):
+
+- `google_dork_passive`, `bing_dork_passive`, `yandex_dork_passive`
+- `url_shortener_search_passive`
+- `shodan_host_passive`, `censys_host_passive`, `fofa_host_passive`
+- `github_code_search_passive`, `gitlab_code_search_passive`
+- `s3_bucket_enum`, `gcs_bucket_enum`, `azure_blob_enum`
+- `mx_posture_audit`, `spf_dkim_dmarc_audit`
+
+`auth-api` (focused app posture):
+
+- `openapi_discovery`, `graphql_surface`, `api_authz_heuristics`
+- `oidc_discovery`, `oauth_misconfig_probe`, `saml_metadata_enum`
+
+`advanced-web` (higher signal variance):
+
+- `http_desync_probe`, `cache_poison_probe`, `waf_diff_probe`
+- `ssrf_gadget_discovery`, `idor_candidate_mapper`, `csrf_policy_audit`
+- keep concurrency low and scope strict
+
 To view the exact active set at runtime:
 
 ```bash

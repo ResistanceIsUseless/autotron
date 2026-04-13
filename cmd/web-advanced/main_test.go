@@ -12,6 +12,9 @@ func TestNormalizeCheck(t *testing.T) {
 	if normalizeCheck("waf-diff") != "waf-diff" {
 		t.Fatal("expected waf-diff")
 	}
+	if normalizeCheck("ssrf-gadget") != "ssrf-gadget" {
+		t.Fatal("expected ssrf-gadget")
+	}
 	if normalizeCheck("idor-map") != "idor-map" {
 		t.Fatal("expected idor-map")
 	}

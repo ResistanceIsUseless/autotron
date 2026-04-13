@@ -49,7 +49,7 @@ func main() {
 func parseFlags() config {
 	var cfg config
 	flag.StringVar(&cfg.targetURL, "url", "", "target URL")
-	flag.StringVar(&cfg.check, "check", "desync", "check to run: desync|cache-poison|waf-diff|idor-map|csrf-audit")
+	flag.StringVar(&cfg.check, "check", "desync", "check to run: desync|cache-poison|waf-diff|ssrf-gadget|idor-map|csrf-audit")
 	flag.BoolVar(&cfg.jsonOutput, "json", false, "emit JSONL output")
 	flag.DurationVar(&cfg.timeout, "timeout", 15*time.Second, "HTTP request timeout")
 	flag.StringVar(&cfg.userAgent, "user-agent", "autotron-web-advanced/1.0", "HTTP User-Agent")
@@ -70,7 +70,7 @@ func run(cfg config) error {
 	}
 	check := normalizeCheck(cfg.check)
 	if check == "" {
-		return fmt.Errorf("unsupported --check %q (supported: desync|cache-poison|waf-diff|idor-map|csrf-audit)", cfg.check)
+		return fmt.Errorf("unsupported --check %q (supported: desync|cache-poison|waf-diff|ssrf-gadget|idor-map|csrf-audit)", cfg.check)
 	}
 	if cfg.timeout <= 0 {
 		return errors.New("--timeout must be > 0")
@@ -90,6 +90,8 @@ func run(cfg config) error {
 		recs, err = checkCachePoison(ctx, client, target, cfg)
 	case "waf-diff":
 		recs, err = checkWAFDiff(ctx, client, target, cfg)
+	case "ssrf-gadget":
+		recs, err = checkSSRFGadget(ctx, client, target, cfg)
 	case "idor-map":
 		recs, err = checkIDORMap(ctx, client, target, cfg)
 	case "csrf-audit":
@@ -243,11 +245,52 @@ func probeGET(ctx context.Context, client *http.Client, target string, cfg confi
 func normalizeCheck(v string) string {
 	v = strings.ToLower(strings.TrimSpace(v))
 	switch v {
-	case "desync", "cache-poison", "waf-diff", "idor-map", "csrf-audit":
+	case "desync", "cache-poison", "waf-diff", "ssrf-gadget", "idor-map", "csrf-audit":
 		return v
 	default:
 		return ""
 	}
+}
+
+func checkSSRFGadget(ctx context.Context, client *http.Client, target string, cfg config) ([]outputRecord, error) {
+	base, err := probeGET(ctx, client, target, cfg, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	probeHeaders := map[string]string{
+		"X-Forwarded-Host": "169.254.169.254",
+		"X-Original-URL":   "/latest/meta-data/",
+		"X-Rewrite-URL":    "/latest/meta-data/",
+	}
+	probe, err := probeGET(ctx, client, target, cfg, probeHeaders)
+	if err != nil {
+		return nil, nil
+	}
+
+	lowerBody := strings.ToLower(probe.body)
+	hitMetadataMarker := strings.Contains(lowerBody, "ami-id") || strings.Contains(lowerBody, "instance-id") || strings.Contains(lowerBody, "security-credentials")
+	if hitMetadataMarker || statusDrift(base.status, probe.status) || headerDrift(base.server, probe.server) {
+		confidence := "tentative"
+		severity := "medium"
+		signal := fmt.Sprintf("baseline=%d/%s probe=%d/%s", base.status, base.server, probe.status, probe.server)
+		if hitMetadataMarker {
+			confidence = "firm"
+			severity = "high"
+			signal = "metadata-like marker observed in probe response"
+		}
+
+		return []outputRecord{{
+			URL:        target,
+			Type:       "ssrf-gadget-candidate",
+			Severity:   severity,
+			Confidence: confidence,
+			Signal:     signal,
+			Details:    "header/path tampering produced SSRF-like behavior change",
+		}}, nil
+	}
+
+	return nil, nil
 }
 
 func checkIDORMap(ctx context.Context, client *http.Client, target string, cfg config) ([]outputRecord, error) {
