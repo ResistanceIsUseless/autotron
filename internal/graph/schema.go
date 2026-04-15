@@ -105,6 +105,7 @@ type FindingSummary struct {
 	Confidence   string   `json:"confidence"`
 	Tools        []string `json:"tools"`
 	AssetCount   int64    `json:"asset_count"`
+	Assets       []string `json:"assets"`
 	LastSeen     string   `json:"last_seen"`
 	CanonicalKey string   `json:"canonical_key"`
 }

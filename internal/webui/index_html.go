@@ -108,7 +108,7 @@ const indexHTML = `<!doctype html>
     <div class="card" style="margin-top: 14px;">
       <strong>Recent Services</strong>
       <table style="margin-top:8px;">
-        <thead><tr><th>IP</th><th>Port</th><th>Product</th><th>TLS</th><th>Last Seen</th></tr></thead>
+        <thead><tr><th>DNS</th><th>Service</th><th>Product</th><th>Header/Banner</th><th>TLS</th><th>Last Seen</th></tr></thead>
         <tbody id="serviceRows"></tbody>
       </table>
     </div>
@@ -352,7 +352,7 @@ const indexHTML = `<!doctype html>
       const data = await j('/api/data/services?limit=25');
       const rows = document.getElementById('serviceRows');
       rows.innerHTML = (data.items || []).map(s =>
-        '<tr><td>' + esc(s.ip || '') + '</td><td>' + esc(s.port || 0) + '</td><td>' + esc(s.product || '') + '</td><td>' + esc(s.tls ? 'yes' : 'no') + '</td><td class="tiny">' + esc(s.last_seen || '') + '</td></tr>'
+        '<tr><td><strong>' + esc(s.dns_name || '(no dns)') + '</strong><div class="tiny muted">aliases: ' + esc(s.dns_count || 0) + '</div></td><td><strong>' + esc(s.service || ((s.ip || '') + ':' + (s.port || 0))) + '</strong><div class="tiny muted">' + esc(s.ip || '') + '</div></td><td>' + esc(s.product || '') + '</td><td class="tiny">' + esc((s.server || s.banner || '-')) + '</td><td>' + esc(s.tls ? 'yes' : 'no') + '</td><td class="tiny">' + esc(s.last_seen || '') + '</td></tr>'
       ).join('');
     }
 
@@ -376,7 +376,7 @@ const indexHTML = `<!doctype html>
       const data = await j('/api/top-findings');
       const rows = document.getElementById('findingRows');
       rows.innerHTML = (data.items || []).map(f =>
-        '<tr><td>' + esc(f.severity) + '</td><td>' + esc(f.title) + '</td><td class="tiny">' + esc((f.tools || []).join(',')) + '</td><td>' + esc(f.asset_count) + '</td></tr>'
+        '<tr><td>' + esc(f.severity) + '</td><td>' + esc(f.title) + '<div class="tiny muted">' + esc((f.assets || []).slice(0,3).join(' | ') || '') + '</div></td><td class="tiny">' + esc((f.tools || []).join(',')) + '</td><td>' + esc(f.asset_count) + '</td></tr>'
       ).join('');
     }
 

@@ -158,6 +158,21 @@ func (p *nmapXMLParser) Parse(ctx context.Context, trigger graph.Node, stdout io
 				props["extra_info"] = port.Service.Extra
 			}
 
+			// Build a generic service banner string for non-HTTP services (and as fallback for HTTP).
+			bannerParts := []string{}
+			if port.Service.Product != "" {
+				bannerParts = append(bannerParts, port.Service.Product)
+			}
+			if port.Service.Version != "" {
+				bannerParts = append(bannerParts, port.Service.Version)
+			}
+			if port.Service.Extra != "" {
+				bannerParts = append(bannerParts, port.Service.Extra)
+			}
+			if len(bannerParts) > 0 {
+				props["banner"] = strings.Join(bannerParts, " ")
+			}
+
 			result.Nodes = append(result.Nodes, graph.Node{
 				Type:       graph.NodeService,
 				PrimaryKey: ipPort,

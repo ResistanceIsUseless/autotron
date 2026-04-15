@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"strings"
 
@@ -101,6 +102,9 @@ func (p *httpProbeParser) processRecord(result *Result, rec httpxRecord, trigger
 		props["cdn_name"] = rec.CDNName
 		props["cdn_type"] = rec.CDNType
 	}
+	if rec.WebServer != "" {
+		props["server"] = rec.WebServer
+	}
 	if rec.Lines > 0 {
 		props["response_lines"] = rec.Lines
 	}
@@ -113,6 +117,31 @@ func (p *httpProbeParser) processRecord(result *Result, rec httpxRecord, trigger
 		PrimaryKey: url,
 		Props:      props,
 	})
+
+	// Propagate HTTP server header to related Service nodes when possible.
+	// This improves service-level context in UI for HTTP/HTTPS services.
+	if rec.WebServer != "" && rec.Port != "" && len(rec.A) > 0 {
+		var port int
+		if _, err := fmt.Sscanf(rec.Port, "%d", &port); err == nil && port > 0 {
+			for _, ip := range rec.A {
+				ip = strings.TrimSpace(ip)
+				if ip == "" {
+					continue
+				}
+				ipPort := fmt.Sprintf("%s:%d", ip, port)
+				result.Nodes = append(result.Nodes, graph.Node{
+					Type:       graph.NodeService,
+					PrimaryKey: ipPort,
+					Props: map[string]any{
+						"ip_port": ipPort,
+						"ip":      ip,
+						"port":    port,
+						"server":  rec.WebServer,
+					},
+				})
+			}
+		}
+	}
 
 	// SERVES edge from triggering Subdomain to URL.
 	if trigger.Type == graph.NodeSubdomain {

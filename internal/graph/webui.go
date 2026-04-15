@@ -40,10 +40,15 @@ type URLView struct {
 }
 
 type ServiceView struct {
+	Service  string `json:"service"`
+	DNSName  string `json:"dns_name"`
+	DNSCount int64  `json:"dns_count"`
 	IP       string `json:"ip"`
 	Port     int64  `json:"port"`
 	Product  string `json:"product"`
 	TLS      bool   `json:"tls"`
+	Server   string `json:"server"`
+	Banner   string `json:"banner"`
 	LastSeen string `json:"last_seen"`
 }
 
@@ -239,12 +244,27 @@ func (c *Client) ListServices(ctx context.Context, limit int) ([]ServiceView, er
 
 	query := `
 MATCH (s:Service)
+OPTIONAL MATCH (i:IP)-[:HAS_SERVICE]->(s)
+OPTIONAL MATCH (d:Subdomain)-[:RESOLVES_TO]->(i)
+WITH s,
+     collect(DISTINCT d.fqdn) AS dns_names,
+     coalesce(s.ip, '') AS ip,
+     toInteger(coalesce(s.port, 0)) AS port,
+     coalesce(s.product, '') AS product,
+     coalesce(s.tls, false) AS tls,
+     coalesce(s.server, '') AS server,
+     coalesce(s.banner, '') AS banner,
+     coalesce(s.last_seen, '') AS last_seen
 RETURN
-  coalesce(s.ip, '') AS ip,
-  toInteger(coalesce(s.port, 0)) AS port,
-  coalesce(s.product, '') AS product,
-  coalesce(s.tls, false) AS tls,
-  coalesce(s.last_seen, '') AS last_seen
+  ip,
+  port,
+  product,
+  tls,
+  server,
+  banner,
+  last_seen,
+  CASE WHEN size(dns_names) > 0 THEN dns_names[0] ELSE '' END AS dns_name,
+  size(dns_names) AS dns_count
 ORDER BY last_seen DESC
 LIMIT $limit`
 
@@ -256,11 +276,18 @@ LIMIT $limit`
 	var out []ServiceView
 	for result.Next(ctx) {
 		rec := result.Record()
+		ip := fmt.Sprintf("%v", recordValue(rec, "ip"))
+		port := toInt64(recordValue(rec, "port"))
 		out = append(out, ServiceView{
-			IP:       fmt.Sprintf("%v", recordValue(rec, "ip")),
-			Port:     toInt64(recordValue(rec, "port")),
+			Service:  fmt.Sprintf("%s:%d", ip, port),
+			DNSName:  fmt.Sprintf("%v", recordValue(rec, "dns_name")),
+			DNSCount: toInt64(recordValue(rec, "dns_count")),
+			IP:       ip,
+			Port:     port,
 			Product:  fmt.Sprintf("%v", recordValue(rec, "product")),
 			TLS:      toBool(recordValue(rec, "tls")),
+			Server:   fmt.Sprintf("%v", recordValue(rec, "server")),
+			Banner:   fmt.Sprintf("%v", recordValue(rec, "banner")),
 			LastSeen: fmt.Sprintf("%v", recordValue(rec, "last_seen")),
 		})
 	}

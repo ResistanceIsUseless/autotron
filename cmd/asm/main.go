@@ -37,6 +37,7 @@ var (
 	enrichersFile string
 	logLevel      string
 	strictTools   bool
+	version       = "dev"
 )
 
 func main() {
@@ -44,6 +45,9 @@ func main() {
 		Use:   "asm",
 		Short: "Attack Surface Monitoring pipeline",
 		Long:  "Data-type-driven enrichment engine backed by Neo4j.",
+		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			printSplash()
+		},
 	}
 
 	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "configs/asm.yaml", "path to global config")
@@ -59,6 +63,11 @@ func main() {
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
+}
+
+func printSplash() {
+	fmt.Fprintf(os.Stderr, "Autotron ASM\\n")
+	fmt.Fprintf(os.Stderr, "Version: %s\\n", version)
 }
 
 func webUICmd() *cobra.Command {
@@ -359,6 +368,34 @@ func scanCmd() *cobra.Command {
 			cfg, err := config.LoadConfig(cfgFile)
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
+			}
+
+			scopeValidator := engine.NewScopeValidator(cfg)
+			var inScopeDomains []string
+			for _, domain := range domains {
+				node := graph.Node{
+					Type:       graph.NodeDomain,
+					PrimaryKey: strings.TrimSpace(domain),
+					Props: map[string]any{
+						"fqdn": strings.TrimSpace(domain),
+					},
+				}
+				if scopeValidator.IsInScope(node) {
+					inScopeDomains = append(inScopeDomains, domain)
+				}
+			}
+
+			if len(inScopeDomains) == 0 {
+				logger.Warn("all seed domains are out of configured scope; no enrichers may dispatch",
+					"domains", domains,
+					"configured_scope_domains", cfg.Scope.Domains,
+				)
+			} else if len(inScopeDomains) < len(domains) {
+				logger.Warn("some seed domains are out of configured scope",
+					"domains", domains,
+					"in_scope_domains", inScopeDomains,
+					"configured_scope_domains", cfg.Scope.Domains,
+				)
 			}
 
 			enrichersCfg, err := config.LoadEnrichers(enrichersFile)

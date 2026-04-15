@@ -9,7 +9,8 @@ neo4j:
 scope:
   # Domains: suffix match. "example.com" matches *.example.com and example.com.
   domains:
-    - "example.com"
+    - "cbord.com"
+    - "cbhzdev.com"
 
   # CIDRs: Optional IP ranges to explicitly mark in-scope for enrichment.
   # Not required — IPs discovered by resolving in-scope subdomains

@@ -449,6 +449,26 @@ WHERE ($severity = '' OR toLower(coalesce(f.severity, '')) = $severity)
   AND ($tool = '' OR any(t IN coalesce(f.tools, CASE WHEN f.tool IS NULL THEN [] ELSE [f.tool] END) WHERE toLower(t) = $tool))
   AND ($since = '' OR toString(coalesce(f.last_seen, '')) >= $since)
 WITH f, count(DISTINCT p) AS asset_count
+OPTIONAL MATCH (p2)-[:HAS_FINDING]->(f)
+WITH f, asset_count, collect(DISTINCT p2) AS parents
+UNWIND parents AS p2
+OPTIONAL MATCH (d:Subdomain)-[:RESOLVES_TO]->(:IP)-[:HAS_SERVICE]->(p2)
+WITH f, asset_count, p2, collect(DISTINCT d.fqdn) AS service_dns
+WITH f, asset_count, collect(DISTINCT
+  CASE
+    WHEN p2:Service AND size(service_dns) > 0
+      THEN service_dns[0] + ' (' + coalesce(p2.ip_port, '') + ')'
+    ELSE coalesce(
+      p2.url,
+      p2.fqdn,
+      p2.ip_port,
+      p2.address,
+      p2.sha256,
+      p2.id,
+      ''
+    )
+  END
+) AS assets
 RETURN
   f.id AS id,
   f.title AS title,
@@ -457,6 +477,7 @@ RETURN
   coalesce(f.confidence, 'tentative') AS confidence,
   coalesce(f.tools, CASE WHEN f.tool IS NULL THEN [] ELSE [f.tool] END) AS tools,
   asset_count,
+  [a IN assets WHERE a <> ''][0..10] AS assets,
   coalesce(f.last_seen, '') AS last_seen,
   coalesce(f.canonical_key, '') AS canonical_key
 ORDER BY
@@ -511,6 +532,9 @@ LIMIT $limit`
 		}
 		if v, ok := rec.Get("asset_count"); ok {
 			s.AssetCount = toInt64(v)
+		}
+		if v, ok := rec.Get("assets"); ok {
+			s.Assets = toStringSlice(v)
 		}
 		if v, ok := rec.Get("last_seen"); ok {
 			s.LastSeen = fmt.Sprintf("%v", v)
