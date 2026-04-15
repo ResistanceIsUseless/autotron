@@ -14,6 +14,12 @@
         "method": "GET",
         "url": "/.git/HEAD",
         "msg": "Git metadata exposed"
+      },
+      {
+        "id": 999962,
+        "method": "GET",
+        "url": "/",
+        "msg": "Server banner changed from 'Microsoft-IIS/10.0' to 'awselb/2.0'."
       }
     ]
   }

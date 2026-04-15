@@ -265,19 +265,31 @@ func TestWebVulnGenericParser_Nikto25And26Shapes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("nikto 2.6 parse failed: %v", err)
 	}
-	if len(res26.Findings) != 1 {
-		t.Fatalf("expected 1 finding for nikto 2.6 sample, got %d", len(res26.Findings))
+	if len(res26.Findings) != 2 {
+		t.Fatalf("expected 2 findings for nikto 2.6 sample, got %d", len(res26.Findings))
 	}
-	ev, ok := res26.Findings[0].Evidence["server_banner"]
-	if !ok || strings.TrimSpace(ev.(string)) == "" {
-		t.Fatalf("expected server_banner in nikto 2.6 evidence")
+
+	var foundRefs bool
+	var foundBannerChange bool
+	for _, f := range res26.Findings {
+		if refs, ok := f.Evidence["references"]; ok {
+			if len(refs.([]string)) > 0 {
+				foundRefs = true
+			}
+		}
+		if f.Type == "nikto-999962" {
+			foundBannerChange = true
+		}
 	}
-	refs, ok := res26.Findings[0].Evidence["references"]
-	if !ok {
-		t.Fatalf("expected references in nikto 2.6 evidence")
+	if !foundRefs {
+		t.Fatalf("expected at least one nikto 2.6 finding with references evidence")
 	}
-	if len(refs.([]string)) == 0 {
-		t.Fatalf("expected non-empty references in nikto 2.6 evidence")
+	if !foundBannerChange {
+		t.Fatalf("expected nikto-999962 banner-change finding")
+	}
+
+	if !hasNodeType(res26.Nodes, graph.NodeService) {
+		t.Fatalf("expected service node update from nikto banner-change check")
 	}
 }
 

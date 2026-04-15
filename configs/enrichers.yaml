@@ -805,7 +805,7 @@ enrichers:
       args: ["-h", "{{.Node.url}}", "-Format", "json"]
       timeout: 30m
     concurrency: 2
-    enabled: false
+    enabled: true
 
   - name: wapiti_scan
     parser: web_vuln_generic

@@ -200,16 +200,77 @@ func (p *webVulnGenericParser) parseNikto(data string, trigger graph.Node, resul
 				ID:         findingID,
 				Type:       fmt.Sprintf("nikto-%s", idToken),
 				Title:      title,
-				Severity:   "info", // nikto doesn't provide severity; default to info
+				Severity:   niktoSeverity(idToken, title),
 				Confidence: "tentative",
 				Tool:       "nikto",
 				Evidence:   evidence,
 				FirstSeen:  now,
 				LastSeen:   now,
 			})
+
+			// Treat Nikto banner-change check as service metadata signal too.
+			if idToken == "999962" {
+				if oldB, newB, ok := parseBannerChange(title); ok {
+					if host.IP != "" && host.Port != "" {
+						var portNum int
+						if _, err := fmt.Sscanf(host.Port, "%d", &portNum); err == nil && portNum > 0 {
+							ipPort := fmt.Sprintf("%s:%d", host.IP, portNum)
+							result.Nodes = append(result.Nodes, graph.Node{
+								Type:       graph.NodeService,
+								PrimaryKey: ipPort,
+								Props: map[string]any{
+									"ip_port":         ipPort,
+									"ip":              host.IP,
+									"port":            portNum,
+									"server":          newB,
+									"banner":          newB,
+									"banner_previous": oldB,
+								},
+							})
+						}
+					}
+				}
+			}
 		}
 	}
 	return found
+}
+
+func niktoSeverity(idToken, title string) string {
+	id := strings.TrimSpace(idToken)
+	t := strings.ToLower(strings.TrimSpace(title))
+
+	// Nikto's well-known "banner changed" signal is informative but not critical.
+	if id == "999962" || strings.Contains(t, "server banner changed") {
+		return "low"
+	}
+
+	// Generic Nikto findings default to info unless parser-specific logic promotes.
+	return "info"
+}
+
+func parseBannerChange(title string) (oldBanner, newBanner string, ok bool) {
+	msg := strings.TrimSpace(title)
+	if msg == "" {
+		return "", "", false
+	}
+
+	marker := "Server banner changed from "
+	idx := strings.Index(msg, marker)
+	if idx < 0 {
+		return "", "", false
+	}
+	rest := strings.TrimSpace(msg[idx+len(marker):])
+	parts := strings.SplitN(rest, " to ", 2)
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	oldBanner = strings.Trim(parts[0], " '")
+	newBanner = strings.Trim(parts[1], " '")
+	if oldBanner == "" || newBanner == "" {
+		return "", "", false
+	}
+	return oldBanner, newBanner, true
 }
 
 func asString(v any) string {
