@@ -34,12 +34,13 @@ func (p *webVulnGenericParser) Name() string { return "web_vuln_generic" }
 
 // niktoFinding represents a nikto JSON finding.
 type niktoFinding struct {
-	ID          string `json:"id"`
+	ID          any    `json:"id"`
 	OSVDBID     string `json:"OSVDB"`
 	Method      string `json:"method"`
 	URL         string `json:"url"`
 	Msg         string `json:"msg"`
 	Description string `json:"description"`
+	References  any    `json:"references"`
 }
 
 // niktoOutput wraps nikto's full JSON output.
@@ -47,6 +48,7 @@ type niktoOutput struct {
 	Host            string         `json:"host"`
 	IP              string         `json:"ip"`
 	Port            string         `json:"port"`
+	ServerBanner    string         `json:"server_banner"`
 	Vulnerabilities []niktoFinding `json:"vulnerabilities"`
 }
 
@@ -170,18 +172,33 @@ func (p *webVulnGenericParser) parseNikto(data string, trigger graph.Node, resul
 			}
 
 			evidence := map[string]any{
-				"nikto_id": vuln.ID,
+				"nikto_id": asString(vuln.ID),
 				"method":   vuln.Method,
 				"url":      vuln.URL,
+				"host":     host.Host,
+				"ip":       host.IP,
+				"port":     host.Port,
+			}
+			if host.ServerBanner != "" {
+				evidence["server_banner"] = host.ServerBanner
 			}
 			if vuln.OSVDBID != "" && vuln.OSVDBID != "0" {
 				evidence["osvdb"] = vuln.OSVDBID
 			}
+			refs := toStringSliceAny(vuln.References)
+			if len(refs) > 0 {
+				evidence["references"] = refs
+			}
 
-			findingID := fmt.Sprintf("nikto-%s-%s-%d", vuln.ID, hashKey(trigger.PrimaryKey), i)
+			idToken := asString(vuln.ID)
+			if strings.TrimSpace(idToken) == "" {
+				idToken = "generic"
+			}
+
+			findingID := fmt.Sprintf("nikto-%s-%s-%d", idToken, hashKey(trigger.PrimaryKey), i)
 			result.Findings = append(result.Findings, graph.Finding{
 				ID:         findingID,
-				Type:       fmt.Sprintf("nikto-%s", vuln.ID),
+				Type:       fmt.Sprintf("nikto-%s", idToken),
 				Title:      title,
 				Severity:   "info", // nikto doesn't provide severity; default to info
 				Confidence: "tentative",
@@ -193,6 +210,45 @@ func (p *webVulnGenericParser) parseNikto(data string, trigger graph.Node, resul
 		}
 	}
 	return found
+}
+
+func asString(v any) string {
+	return strings.TrimSpace(fmt.Sprintf("%v", v))
+}
+
+func toStringSliceAny(v any) []string {
+	switch arr := v.(type) {
+	case []string:
+		out := make([]string, 0, len(arr))
+		for _, item := range arr {
+			item = strings.TrimSpace(item)
+			if item != "" {
+				out = append(out, item)
+			}
+		}
+		return out
+	case []any:
+		out := make([]string, 0, len(arr))
+		for _, item := range arr {
+			s := strings.TrimSpace(fmt.Sprintf("%v", item))
+			if s != "" && s != "<nil>" {
+				out = append(out, s)
+			}
+		}
+		return out
+	case string:
+		s := strings.TrimSpace(arr)
+		if s == "" {
+			return nil
+		}
+		return []string{s}
+	default:
+		s := strings.TrimSpace(fmt.Sprintf("%v", v))
+		if s == "" || s == "<nil>" {
+			return nil
+		}
+		return []string{s}
+	}
 }
 
 func (p *webVulnGenericParser) parseWapiti(data string, trigger graph.Node, result *Result, now time.Time) bool {

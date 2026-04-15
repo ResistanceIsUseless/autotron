@@ -801,6 +801,7 @@ enrichers:
       predicate: "n.status_code = 200"
     command:
       bin: nikto
+      # Nikto 2.5/2.6 JSON output shape
       args: ["-h", "{{.Node.url}}", "-Format", "json"]
       timeout: 30m
     concurrency: 2

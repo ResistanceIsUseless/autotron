@@ -242,6 +242,45 @@ func TestProxyhawkJSONParser_SuccessAndDecodeError(t *testing.T) {
 	}
 }
 
+func TestWebVulnGenericParser_Nikto25And26Shapes(t *testing.T) {
+	p := &webVulnGenericParser{}
+	trigger := graph.Node{Type: graph.NodeURL, PrimaryKey: "https://api.example.com", Props: map[string]any{"url": "https://api.example.com"}}
+
+	// Nikto 2.5-ish shape: string id + vulnerabilities array.
+	v25 := fixture(t, "nikto_25_sample.json")
+	res25, err := p.Parse(context.Background(), trigger, strings.NewReader(v25), strings.NewReader(""))
+	if err != nil {
+		t.Fatalf("nikto 2.5 parse failed: %v", err)
+	}
+	if len(res25.Findings) != 2 {
+		t.Fatalf("expected 2 findings for nikto 2.5 sample, got %d", len(res25.Findings))
+	}
+	if !strings.HasPrefix(res25.Findings[0].Type, "nikto-") {
+		t.Fatalf("expected nikto type prefix, got %q", res25.Findings[0].Type)
+	}
+
+	// Nikto 2.6-ish shape: numeric id + references + server_banner.
+	v26 := fixture(t, "nikto_26_sample.json")
+	res26, err := p.Parse(context.Background(), trigger, strings.NewReader(v26), strings.NewReader(""))
+	if err != nil {
+		t.Fatalf("nikto 2.6 parse failed: %v", err)
+	}
+	if len(res26.Findings) != 1 {
+		t.Fatalf("expected 1 finding for nikto 2.6 sample, got %d", len(res26.Findings))
+	}
+	ev, ok := res26.Findings[0].Evidence["server_banner"]
+	if !ok || strings.TrimSpace(ev.(string)) == "" {
+		t.Fatalf("expected server_banner in nikto 2.6 evidence")
+	}
+	refs, ok := res26.Findings[0].Evidence["references"]
+	if !ok {
+		t.Fatalf("expected references in nikto 2.6 evidence")
+	}
+	if len(refs.([]string)) == 0 {
+		t.Fatalf("expected non-empty references in nikto 2.6 evidence")
+	}
+}
+
 func TestSecretScannerParser_TrufflehogAndGitleaks(t *testing.T) {
 	p := &secretScannerParser{}
 	trigger := graph.Node{Type: graph.NodeURL, PrimaryKey: "https://api.example.com", Props: map[string]any{"url": "https://api.example.com"}}

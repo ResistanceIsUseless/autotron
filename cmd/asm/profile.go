@@ -27,6 +27,7 @@ var profileGroups = map[string][]string{
 	"advanced-web": {
 		"http_desync_probe", "cache_poison_probe", "waf_diff_probe",
 		"ssrf_gadget_discovery", "idor_candidate_mapper", "csrf_policy_audit",
+		"nikto_scan",
 	},
 }
 

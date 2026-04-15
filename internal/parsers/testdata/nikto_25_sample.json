@@ -1,0 +1,23 @@
+[
+  {
+    "host": "example.org",
+    "ip": "93.184.216.34",
+    "port": "443",
+    "vulnerabilities": [
+      {
+        "id": "999001",
+        "OSVDB": "0",
+        "method": "GET",
+        "url": "/",
+        "msg": "The anti-clickjacking X-Frame-Options header is not present.",
+        "description": "Header missing"
+      },
+      {
+        "id": "0",
+        "method": "GET",
+        "url": "/admin",
+        "msg": "Admin path exposed"
+      }
+    ]
+  }
+]

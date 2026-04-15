@@ -1,0 +1,20 @@
+[
+  {
+    "host": "api.example.org",
+    "ip": "203.0.113.20",
+    "port": "80",
+    "server_banner": "nginx/1.24.0",
+    "vulnerabilities": [
+      {
+        "id": 123456,
+        "references": [
+          "CVE-2024-1111",
+          "https://example.org/advisory"
+        ],
+        "method": "GET",
+        "url": "/.git/HEAD",
+        "msg": "Git metadata exposed"
+      }
+    ]
+  }
+]
