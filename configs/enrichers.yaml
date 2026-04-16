@@ -459,6 +459,7 @@ enrichers:
 
   - name: nuclei_root_https
     parser: nuclei_jsonl
+    weight: heavy
     subscribes:
       node_type: Subdomain
       match: "-[:RESOLVES_TO]->(i:IP)-[:HAS_SERVICE]->(svc:Service)"
@@ -481,6 +482,7 @@ enrichers:
 
   - name: nikto_root_https
     parser: web_vuln_generic
+    weight: heavy
     subscribes:
       node_type: Subdomain
       match: "-[:RESOLVES_TO]->(i:IP)-[:HAS_SERVICE]->(svc:Service)"
@@ -500,6 +502,7 @@ enrichers:
 
   - name: nuclei_tech
     parser: nuclei_jsonl
+    weight: heavy
     subscribes:
       node_type: URL
       predicate: "n.status_code = 200"
@@ -518,6 +521,7 @@ enrichers:
 
   - name: nuclei_server_variant_url
     parser: nuclei_jsonl
+    weight: heavy
     subscribes:
       node_type: URL
       predicate: >
@@ -542,6 +546,7 @@ enrichers:
 
   - name: nikto_server_variant_url
     parser: web_vuln_generic
+    weight: heavy
     subscribes:
       node_type: URL
       predicate: >
@@ -563,6 +568,7 @@ enrichers:
 
   - name: nuclei_network
     parser: nuclei_jsonl
+    weight: heavy
     subscribes:
       node_type: Service
       predicate: "NOT n.product IN ['http', 'https'] AND n.in_scope = true"

@@ -43,9 +43,10 @@ type ScopeConfig struct {
 
 // BudgetConfig controls the explosion — hard limits on iterations and depth.
 type BudgetConfig struct {
-	MaxIterations     int `yaml:"max_iterations"`      // caps dispatcher passes (default 5)
+	MaxIterations     int `yaml:"max_iterations"`      // legacy: accepted but ignored by scheduler
 	MaxDiscoveryDepth int `yaml:"max_discovery_depth"` // caps chain length (default 6)
-	GlobalWorkers     int `yaml:"global_workers"`      // worker pool size (default NumCPU*2)
+	GlobalWorkers     int `yaml:"global_workers"`      // light worker pool size (default NumCPU*2)
+	HeavyWorkers      int `yaml:"heavy_workers"`       // heavy worker pool size (default max(2, NumCPU/2))
 }
 
 // ScanConfig holds runtime scan options.
@@ -62,7 +63,13 @@ type EnricherDef struct {
 	Subscribes  SubscriptionDef `yaml:"subscribes"`  // what triggers this enricher
 	Command     CommandDef      `yaml:"command"`     // how to invoke the tool
 	Concurrency int             `yaml:"concurrency"` // per-enricher semaphore
+	Weight      string          `yaml:"weight"`      // "light" (default) or "heavy"
 	Enabled     bool            `yaml:"enabled"`
+}
+
+// IsHeavy returns true if this enricher should use the heavy worker pool.
+func (e *EnricherDef) IsHeavy() bool {
+	return e.Weight == "heavy"
 }
 
 // SubscriptionDef defines what node type and predicate triggers an enricher.
@@ -114,6 +121,13 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if cfg.Budget.GlobalWorkers == 0 {
 		cfg.Budget.GlobalWorkers = runtime.NumCPU() * 2
+	}
+	if cfg.Budget.HeavyWorkers == 0 {
+		hw := runtime.NumCPU() / 2
+		if hw < 2 {
+			hw = 2
+		}
+		cfg.Budget.HeavyWorkers = hw
 	}
 	if cfg.Scan.JSReconBase == "" {
 		cfg.Scan.JSReconBase = "http://localhost:37232"

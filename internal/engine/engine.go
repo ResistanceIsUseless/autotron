@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -136,30 +135,10 @@ func (e *Engine) Run(ctx context.Context, domains []string) (err error) {
 		e.logger.Info("seeded domain", "fqdn", domain)
 	}
 
-	// Main dispatch loop.
-	for iteration := 1; iteration <= e.cfg.Budget.MaxIterations; iteration++ {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-
-		dispatched, iterErr := e.runIteration(ctx, iteration, scanRunID)
-		if iterErr != nil {
-			return fmt.Errorf("iteration %d: %w", iteration, iterErr)
-		}
-
-		e.logger.Info("iteration complete",
-			"iteration", iteration,
-			"dispatched", dispatched,
-		)
-
-		// Convergence: no new work dispatched.
-		if dispatched == 0 {
-			e.logger.Info("converged — no new work", "iterations", iteration)
-			break
-		}
-
-		// Reset in-memory dedup between iterations (persistent state is in Neo4j).
-		e.dedup.Reset()
+	// Main dispatch loop — use the continuous scheduler.
+	sched := newScheduler(e, scanRunID)
+	if err := sched.run(ctx); err != nil && err != context.Canceled {
+		return fmt.Errorf("scheduler: %w", err)
 	}
 
 	e.logger.Info("scan complete", "scan_run_id", scanRunID)
@@ -173,186 +152,54 @@ func errorString(err error) string {
 	return err.Error()
 }
 
-// runIteration runs a single pass over all enrichers, dispatching jobs for
-// any pending nodes. Returns the total number of jobs dispatched.
-func (e *Engine) runIteration(ctx context.Context, iteration int, scanRunID string) (int, error) {
-	// Global worker pool.
-	workerPool := make(chan struct{}, e.cfg.Budget.GlobalWorkers)
-
-	var (
-		wg         sync.WaitGroup
-		mu         sync.Mutex
-		totalJobs  int
-		firstError error
+// handleDepthBudgetExceeded logs and records a finding for a node that exceeds
+// the discovery depth budget, then marks it enriched.
+func (e *Engine) handleDepthBudgetExceeded(ctx context.Context, enricher config.EnricherDef, node graph.Node, depth int, log *slog.Logger) {
+	log.Warn("skipping node beyond discovery depth budget",
+		"node", node.PrimaryKey,
+		"depth", depth,
+		"max_depth", e.cfg.Budget.MaxDiscoveryDepth,
 	)
-
-	for _, enricher := range e.enrichers {
-		if ctx.Err() != nil {
-			break
-		}
-
-		// Query pending nodes for this enricher.
-		pending, err := e.graphClient.QueryPendingNodes(
-			ctx,
-			enricher.Subscribes.NodeType,
-			enricher.Name,
-			enricher.Subscribes.Predicate,
-			enricher.Subscribes.Match,
-			enricher.Subscribes.Returns,
-		)
-		if err != nil {
-			e.logger.Error("query pending failed",
-				"enricher", enricher.Name,
-				"error", err,
-			)
-			continue
-		}
-
-		if len(pending) == 0 {
-			continue
-		}
-
-		e.logger.Debug("found pending nodes",
-			"enricher", enricher.Name,
-			"count", len(pending),
-		)
-
-		for _, work := range pending {
-			if ctx.Err() != nil {
-				break
-			}
-
-			node := work.Node
-			if !e.scope.ShouldEnrich(node) {
-				e.logger.Debug("skipping out-of-scope trigger node",
-					"enricher", enricher.Name,
-					"node", node.PrimaryKey,
-					"type", node.Type,
-				)
-				if err := e.graphClient.MarkEnriched(ctx, node.Type, node.PrimaryKey, enricher.Name); err != nil {
-					e.logger.Warn("failed to mark skipped trigger enriched",
-						"enricher", enricher.Name,
-						"node", node.PrimaryKey,
-						"error", err,
-					)
-				}
-				continue
-			}
-
-			depth := nodeDiscoveryDepth(node)
-			if exceedsDiscoveryDepth(depth, e.cfg.Budget.MaxDiscoveryDepth) {
-				e.logger.Warn("skipping node beyond discovery depth budget",
-					"enricher", enricher.Name,
-					"node", node.PrimaryKey,
-					"depth", depth,
-					"max_depth", e.cfg.Budget.MaxDiscoveryDepth,
-				)
-				findingID := depthBudgetFindingID(enricher.Name, node.Type, node.PrimaryKey, depth)
-				if err := e.graphClient.UpsertFinding(ctx, graph.Finding{
-					ID:         findingID,
-					Type:       "discovery-depth-budget-exceeded",
-					Title:      fmt.Sprintf("Skipped enrichment beyond discovery depth budget: %s", node.PrimaryKey),
-					Severity:   "info",
-					Confidence: "confirmed",
-					Tool:       enricher.Name,
-					Evidence: map[string]any{
-						"node_type": node.Type,
-						"node_key":  node.PrimaryKey,
-						"depth":     depth,
-						"max_depth": e.cfg.Budget.MaxDiscoveryDepth,
-					},
-					FirstSeen: time.Now().UTC(),
-					LastSeen:  time.Now().UTC(),
-				}, node.Type, node.PrimaryKey); err != nil {
-					e.logger.Warn("failed to upsert depth budget finding",
-						"enricher", enricher.Name,
-						"node", node.PrimaryKey,
-						"error", err,
-					)
-				} else {
-					e.metrics.AddFinding(findingID, "info")
-				}
-				if err := e.graphClient.MarkEnriched(ctx, node.Type, node.PrimaryKey, enricher.Name); err != nil {
-					e.logger.Warn("failed to mark over-budget node enriched",
-						"enricher", enricher.Name,
-						"node", node.PrimaryKey,
-						"error", err,
-					)
-				}
-				continue
-			}
-
-			// Skip nodes with empty primary keys (shouldn't happen, but guard).
-			if node.PrimaryKey == "" {
-				e.logger.Warn("skipping node with empty primary key",
-					"enricher", enricher.Name, "type", enricher.Subscribes.NodeType)
-				continue
-			}
-
-			// In-memory dedup within this iteration.
-			edgeKey := edgePropsKey(work.EdgeProps)
-			if e.dedup.Check(node.PrimaryKey, edgeKey, enricher.Name) {
-				continue
-			}
-			e.dedup.Mark(node.PrimaryKey, edgeKey, enricher.Name)
-
-			mu.Lock()
-			totalJobs++
-			mu.Unlock()
-
-			wg.Add(1)
-			enricher := enricher // capture
-			work := work         // capture
-
-			go func() {
-				defer wg.Done()
-
-				// Acquire global worker slot.
-				workerPool <- struct{}{}
-				defer func() { <-workerPool }()
-
-				// Acquire per-enricher semaphore.
-				sem := e.semaphores[enricher.Name]
-				sem <- struct{}{}
-				defer func() { <-sem }()
-
-				if err := e.dispatchJob(ctx, enricher, work, scanRunID); err != nil {
-					e.logger.Error("job failed",
-						"enricher", enricher.Name,
-						"node", work.Node.PrimaryKey,
-						"error", err,
-					)
-					mu.Lock()
-					if firstError == nil {
-						firstError = err
-					}
-					mu.Unlock()
-				}
-			}()
-		}
+	findingID := depthBudgetFindingID(enricher.Name, node.Type, node.PrimaryKey, depth)
+	if err := e.graphClient.UpsertFinding(ctx, graph.Finding{
+		ID:         findingID,
+		Type:       "discovery-depth-budget-exceeded",
+		Title:      fmt.Sprintf("Skipped enrichment beyond discovery depth budget: %s", node.PrimaryKey),
+		Severity:   "info",
+		Confidence: "confirmed",
+		Tool:       enricher.Name,
+		Evidence: map[string]any{
+			"node_type": node.Type,
+			"node_key":  node.PrimaryKey,
+			"depth":     depth,
+			"max_depth": e.cfg.Budget.MaxDiscoveryDepth,
+		},
+		FirstSeen: time.Now().UTC(),
+		LastSeen:  time.Now().UTC(),
+	}, node.Type, node.PrimaryKey); err != nil {
+		log.Warn("failed to upsert depth budget finding", "node", node.PrimaryKey, "error", err)
+	} else {
+		e.metrics.AddFinding(findingID, "info")
 	}
-
-	wg.Wait()
-
-	// Individual job errors are logged but don't halt the iteration.
-	// The engine continues processing all enrichers even when some fail.
-	if firstError != nil {
-		e.logger.Warn("iteration had errors (non-fatal)", "first_error", firstError)
+	if err := e.graphClient.MarkEnriched(ctx, node.Type, node.PrimaryKey, enricher.Name); err != nil {
+		log.Warn("failed to mark over-budget node enriched", "node", node.PrimaryKey, "error", err)
 	}
-	return totalJobs, nil
 }
 
-// dispatchJob runs a single enricher against a single node: expand templates,
-// execute the tool, parse output, persist results, mark enriched.
-func (e *Engine) dispatchJob(ctx context.Context, enricher config.EnricherDef, work graph.PendingWork, scanRunID string) error {
+// dispatchJobWithProduced runs a single enricher against a single node: expand
+// templates, execute the tool, parse output, persist results, mark enriched.
+// It returns the set of node types that were produced so the scheduler can
+// wake downstream enrichers immediately.
+func (e *Engine) dispatchJobWithProduced(ctx context.Context, enricher config.EnricherDef, work graph.PendingWork, scanRunID string) (map[graph.NodeType]bool, error) {
 	node := work.Node
 	start := time.Now()
 	log := e.logger.With("enricher", enricher.Name, "node", node.PrimaryKey)
+	produced := make(map[graph.NodeType]bool)
 
 	// Look up the parser.
 	parser, err := parsers.Get(enricher.Parser)
 	if err != nil {
-		return fmt.Errorf("get parser: %w", err)
+		return nil, fmt.Errorf("get parser: %w", err)
 	}
 
 	// Build config values for template expansion.
@@ -365,13 +212,13 @@ func (e *Engine) dispatchJob(ctx context.Context, enricher config.EnricherDef, w
 	tmplData := BuildTemplateData(node, work.EdgeProps, scanRunID, configVals)
 	expandedArgs, err := ExpandArgs(enricher.Command.Args, tmplData)
 	if err != nil {
-		return fmt.Errorf("expand args: %w", err)
+		return nil, fmt.Errorf("expand args: %w", err)
 	}
 
 	// Expand stdin template if provided.
 	expandedStdin, err := ExpandStdin(enricher.Command.Stdin, tmplData)
 	if err != nil {
-		return fmt.Errorf("expand stdin: %w", err)
+		return nil, fmt.Errorf("expand stdin: %w", err)
 	}
 
 	// Execute the tool.
@@ -392,7 +239,7 @@ func (e *Engine) dispatchJob(ctx context.Context, enricher config.EnricherDef, w
 				"outcome", outcome,
 				"duration", time.Since(start),
 			)
-			return fmt.Errorf("run tool transient: %w", err)
+			return nil, fmt.Errorf("run tool transient: %w", err)
 		}
 
 		log.Error("fatal runner failure — marking enriched",
@@ -401,15 +248,15 @@ func (e *Engine) dispatchJob(ctx context.Context, enricher config.EnricherDef, w
 			"duration", time.Since(start),
 		)
 		_ = e.graphClient.MarkEnriched(ctx, node.Type, node.PrimaryKey, enricher.Name)
-		return fmt.Errorf("run tool: %w", err)
+		return nil, fmt.Errorf("run tool: %w", err)
 	}
 
 	if result.Stdout.Len() == 0 && result.Stderr.Len() == 0 {
 		if err := e.graphClient.MarkEnriched(ctx, node.Type, node.PrimaryKey, enricher.Name); err != nil {
-			return fmt.Errorf("mark enriched after no-data: %w", err)
+			return nil, fmt.Errorf("mark enriched after no-data: %w", err)
 		}
 		log.Info("job complete", "nodes", 0, "edges", 0, "findings", 0, "duration", time.Since(start), "outcome", jobOutcomeNoData)
-		return nil
+		return nil, nil
 	}
 
 	// Parse the output.
@@ -421,25 +268,17 @@ func (e *Engine) dispatchJob(ctx context.Context, enricher config.EnricherDef, w
 			"outcome", outcome,
 			"duration", time.Since(start),
 		)
-		// Mark enriched even on parse error to avoid infinite retry.
 		_ = e.graphClient.MarkEnriched(ctx, node.Type, node.PrimaryKey, enricher.Name)
-		return fmt.Errorf("parse: %w", err)
+		return nil, fmt.Errorf("parse: %w", err)
 	}
 
 	// Persist results — scope-check each node before upsert.
-	// Child nodes can inherit scope from the trigger node (e.g. an IP
-	// discovered by resolving an in-scope subdomain inherits that scope).
-	// For CNAME chains, check whether the trigger node has an in-scope
-	// ancestor even if the trigger itself is out of scope (e.g.
-	// app.example.com → CNAME → edge.vendor.net → RESOLVES_TO → IP).
 	triggerInScope := false
 	if v, ok := node.Props["in_scope"]; ok {
 		if b, ok := v.(bool); ok {
 			triggerInScope = b
 		}
 	}
-	// If trigger is out-of-scope but is a Subdomain, check for an in-scope
-	// ancestor via CNAME chain. This propagates scope through CNAME hops.
 	if !triggerInScope && node.Type == graph.NodeSubdomain {
 		if fqdn, _ := node.Props["fqdn"].(string); fqdn != "" {
 			if hasAncestor, err := e.graphClient.HasInScopeAncestor(ctx, fqdn); err == nil && hasAncestor {
@@ -492,9 +331,9 @@ func (e *Engine) dispatchJob(ctx context.Context, enricher config.EnricherDef, w
 			log.Error("upsert node failed", "node_type", n.Type, "key", n.PrimaryKey, "error", err)
 			continue
 		}
+		produced[n.Type] = true
 		e.metrics.AddNode(n.Type, n.PrimaryKey, inScope)
 
-		// Out-of-scope nodes get a finding but no further enrichment.
 		if !inScope {
 			if err := e.graphClient.UpsertFinding(ctx, graph.Finding{
 				ID:         fmt.Sprintf("oos-%s-%s", n.Type, n.PrimaryKey),
@@ -533,7 +372,7 @@ func (e *Engine) dispatchJob(ctx context.Context, enricher config.EnricherDef, w
 
 	// Mark the triggering node as enriched by this enricher.
 	if err := e.graphClient.MarkEnriched(ctx, node.Type, node.PrimaryKey, enricher.Name); err != nil {
-		return fmt.Errorf("mark enriched: %w", err)
+		return produced, fmt.Errorf("mark enriched: %w", err)
 	}
 
 	log.Info("job complete",
@@ -543,7 +382,7 @@ func (e *Engine) dispatchJob(ctx context.Context, enricher config.EnricherDef, w
 		"duration", time.Since(start),
 		"outcome", jobOutcomeSuccess,
 	)
-	return nil
+	return produced, nil
 }
 
 func edgePropsKey(edgeProps map[string]any) string {

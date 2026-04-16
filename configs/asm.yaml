@@ -28,15 +28,19 @@ scope:
   ip_direct_http: false
 
 budget:
-  # Maximum dispatcher iterations before stopping. Each iteration processes
-  # all pending nodes across all enrichers.
+  # Maximum dispatcher iterations (legacy — accepted but ignored by scheduler).
+  # The continuous scheduler uses quiescence detection instead.
   max_iterations: 15
 
   # Maximum discovery chain length. Seeds are depth 0; each hop adds 1.
   max_discovery_depth: 6
 
-  # Global worker pool size. Defaults to NumCPU * 2 if 0.
+  # Light worker pool size (fast discovery enrichers). Defaults to NumCPU * 2 if 0.
   global_workers: 0
+
+  # Heavy worker pool size (nuclei, nikto — slow tools). Defaults to max(2, NumCPU/2) if 0.
+  # Keeps heavy tools from starving the fast discovery pipeline.
+  heavy_workers: 0
 
 scan:
   # Path to DNS resolvers file (used by dnsx, puredns, shuffledns).
