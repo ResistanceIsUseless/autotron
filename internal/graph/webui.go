@@ -297,3 +297,117 @@ LIMIT $limit`
 
 	return out, nil
 }
+
+// EnricherProgress represents how far each enricher has progressed through its
+// eligible node pool.
+type EnricherProgress struct {
+	Enricher string  `json:"enricher"`
+	Done     int64   `json:"done"`
+	Total    int64   `json:"total"`
+	Pct      float64 `json:"pct"`
+}
+
+// ListEnricherProgress returns per-enricher completion stats by comparing
+// the enriched_by array on nodes against the set of enabled enricher names.
+func (c *Client) ListEnricherProgress(ctx context.Context, enricherNames []string) ([]EnricherProgress, error) {
+	session := c.driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeRead})
+	defer session.Close(ctx)
+
+	query := `
+UNWIND $names AS ename
+MATCH (n)
+WHERE n.enriched_by IS NOT NULL
+WITH ename, count(n) AS total,
+     sum(CASE WHEN ename IN n.enriched_by THEN 1 ELSE 0 END) AS done
+WHERE total > 0
+RETURN ename AS enricher, done, total
+ORDER BY enricher`
+
+	result, err := session.Run(ctx, query, map[string]any{"names": enricherNames})
+	if err != nil {
+		return nil, fmt.Errorf("query enricher progress: %w", err)
+	}
+
+	var out []EnricherProgress
+	for result.Next(ctx) {
+		rec := result.Record()
+		done := toInt64(recordValue(rec, "done"))
+		total := toInt64(recordValue(rec, "total"))
+		pct := float64(0)
+		if total > 0 {
+			pct = float64(done) / float64(total) * 100
+		}
+		out = append(out, EnricherProgress{
+			Enricher: fmt.Sprintf("%v", recordValue(rec, "enricher")),
+			Done:     done,
+			Total:    total,
+			Pct:      pct,
+		})
+	}
+	if err := result.Err(); err != nil {
+		return nil, fmt.Errorf("query enricher progress: %w", err)
+	}
+	return out, nil
+}
+
+// RecentActivity represents a recent graph event for the activity feed.
+type RecentActivity struct {
+	Type      string `json:"type"`
+	Label     string `json:"label"`
+	Detail    string `json:"detail"`
+	Timestamp string `json:"timestamp"`
+}
+
+// ListRecentActivity returns the most recent graph events (new nodes, findings, etc).
+func (c *Client) ListRecentActivity(ctx context.Context, limit int) ([]RecentActivity, error) {
+	if limit <= 0 {
+		limit = 30
+	}
+
+	session := c.driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeRead})
+	defer session.Close(ctx)
+
+	query := `
+MATCH (n)
+WHERE n.last_seen IS NOT NULL AND labels(n)[0] IS NOT NULL
+WITH labels(n)[0] AS lbl, n
+ORDER BY n.last_seen DESC
+LIMIT $limit
+RETURN
+  lbl AS type,
+  CASE lbl
+    WHEN 'Finding' THEN coalesce(n.title, n.type, 'finding')
+    WHEN 'Subdomain' THEN coalesce(n.fqdn, '')
+    WHEN 'IP' THEN coalesce(n.ip, '')
+    WHEN 'Service' THEN coalesce(n.ip, '') + ':' + toString(coalesce(n.port, 0))
+    WHEN 'URL' THEN coalesce(n.url, '')
+    WHEN 'Domain' THEN coalesce(n.fqdn, '')
+    ELSE coalesce(n.id, n.fqdn, n.ip, n.url, '')
+  END AS label,
+  CASE lbl
+    WHEN 'Finding' THEN coalesce(n.severity, '') + ' / ' + coalesce(n.tool, '')
+    WHEN 'Service' THEN coalesce(n.product, '')
+    ELSE ''
+  END AS detail,
+  coalesce(n.last_seen, '') AS timestamp`
+
+	result, err := session.Run(ctx, query, map[string]any{"limit": limit})
+	if err != nil {
+		return nil, fmt.Errorf("query recent activity: %w", err)
+	}
+
+	var out []RecentActivity
+	for result.Next(ctx) {
+		rec := result.Record()
+		out = append(out, RecentActivity{
+			Type:      fmt.Sprintf("%v", recordValue(rec, "type")),
+			Label:     fmt.Sprintf("%v", recordValue(rec, "label")),
+			Detail:    fmt.Sprintf("%v", recordValue(rec, "detail")),
+			Timestamp: fmt.Sprintf("%v", recordValue(rec, "timestamp")),
+		})
+	}
+	if err := result.Err(); err != nil {
+		return nil, fmt.Errorf("query recent activity: %w", err)
+	}
+	return out, nil
+}

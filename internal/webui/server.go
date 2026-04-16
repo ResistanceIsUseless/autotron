@@ -16,21 +16,23 @@ import (
 )
 
 type Server struct {
-	graphClient *graph.Client
-	logger      *slog.Logger
-	jsreconBase string
-	client      *http.Client
+	graphClient   *graph.Client
+	logger        *slog.Logger
+	jsreconBase   string
+	client        *http.Client
+	enricherNames []string
 }
 
-func NewServer(graphClient *graph.Client, logger *slog.Logger, jsreconBase string) *Server {
+func NewServer(graphClient *graph.Client, logger *slog.Logger, jsreconBase string, enricherNames ...string) *Server {
 	if strings.TrimSpace(jsreconBase) == "" {
 		jsreconBase = "http://localhost:37232"
 	}
 	return &Server{
-		graphClient: graphClient,
-		logger:      logger.With("component", "webui"),
-		jsreconBase: strings.TrimRight(jsreconBase, "/"),
-		client:      &http.Client{Timeout: 30 * time.Second},
+		graphClient:   graphClient,
+		logger:        logger.With("component", "webui"),
+		jsreconBase:   strings.TrimRight(jsreconBase, "/"),
+		client:        &http.Client{Timeout: 30 * time.Second},
+		enricherNames: enricherNames,
 	}
 }
 
@@ -43,6 +45,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/data/urls", s.handleURLs)
 	mux.HandleFunc("/api/data/services", s.handleServices)
 	mux.HandleFunc("/api/top-findings", s.handleTopFindings)
+	mux.HandleFunc("/api/enricher-progress", s.handleEnricherProgress)
+	mux.HandleFunc("/api/activity", s.handleActivity)
 	mux.HandleFunc("/api/jsrecon/monitor", s.handleMonitorAdd)
 	mux.HandleFunc("/api/jsrecon/monitor/check", s.handleMonitorCheck)
 	mux.HandleFunc("/api/jsrecon/monitor/list", s.handleMonitorList)
@@ -393,4 +397,30 @@ func parseInt(s string) (int, error) {
 	var n int
 	_, err := fmt.Sscanf(s, "%d", &n)
 	return n, err
+}
+
+func (s *Server) handleEnricherProgress(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	items, err := s.graphClient.ListEnricherProgress(ctx, s.enricherNames)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
+}
+
+func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	limit := 30
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		if n, err := parseInt(raw); err == nil && n > 0 && n <= 200 {
+			limit = n
+		}
+	}
+	items, err := s.graphClient.ListRecentActivity(ctx, limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
 }

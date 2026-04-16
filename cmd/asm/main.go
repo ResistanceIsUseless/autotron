@@ -98,7 +98,15 @@ func webUICmd() *cobra.Command {
 				jsreconBase = cfg.Scan.JSReconBase
 			}
 
-			srv := webui.NewServer(graphClient, logger, jsreconBase)
+			// Load enricher names for progress tracking.
+			var enricherNames []string
+			if enrichersCfg, err := config.LoadEnrichers(enrichersFile); err == nil {
+				for _, e := range enrichersCfg.EnabledEnrichers() {
+					enricherNames = append(enricherNames, e.Name)
+				}
+			}
+
+			srv := webui.NewServer(graphClient, logger, jsreconBase, enricherNames...)
 			httpServer := &http.Server{
 				Addr:    addr,
 				Handler: srv.Routes(),
