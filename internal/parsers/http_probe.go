@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	neturl "net/url"
 	"strings"
 
 	"github.com/resistanceisuseless/autotron/internal/graph"
@@ -93,6 +94,20 @@ func (p *httpProbeParser) processRecord(result *Result, rec httpxRecord, trigger
 		"title":          rec.Title,
 		"scheme":         rec.Scheme,
 		"webserver":      rec.WebServer,
+		"server":         rec.WebServer,
+	}
+	if rec.Host != "" {
+		props["host"] = rec.Host
+	}
+	if parsed, err := neturl.Parse(url); err == nil {
+		if parsed.Hostname() != "" {
+			props["host"] = parsed.Hostname()
+		}
+		path := parsed.EscapedPath()
+		if path == "" {
+			path = "/"
+		}
+		props["path"] = path
 	}
 	if rec.FinalURL != "" && rec.FinalURL != url {
 		props["final_url"] = rec.FinalURL

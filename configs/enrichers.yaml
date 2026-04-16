@@ -137,6 +137,7 @@ enrichers:
       bin: nmap
       args:
         - "-sV"
+        - "-T4"
         - "-Pn"
         - "--script"
         - "ssh-auth-methods,ssh2-enum-algos,ssh-hostkey"
@@ -147,7 +148,7 @@ enrichers:
         - "{{.Node.ip}}"
       timeout: 5m
       retries: 1
-    concurrency: 4
+    concurrency: 6
     enabled: true
 
   - name: nmap_smb
@@ -159,6 +160,7 @@ enrichers:
       bin: nmap
       args:
         - "-sV"
+        - "-T4"
         - "-Pn"
         - "--script"
         - "smb-enum-shares,smb-enum-users,smb-os-discovery,smb-vuln-*"
@@ -169,7 +171,7 @@ enrichers:
         - "{{.Node.ip}}"
       timeout: 10m
       retries: 1
-    concurrency: 4
+    concurrency: 6
     enabled: true
 
   - name: nmap_http_scripts
@@ -181,6 +183,7 @@ enrichers:
       bin: nmap
       args:
         - "-sV"
+        - "-T4"
         - "-Pn"
         - "--script"
         - "http-enum,http-headers,http-methods,http-title,http-robots.txt"
@@ -191,7 +194,7 @@ enrichers:
         - "{{.Node.ip}}"
       timeout: 4m
       retries: 0
-    concurrency: 4
+    concurrency: 8
     enabled: true
 
   - name: nmap_ssl_enum
@@ -203,6 +206,7 @@ enrichers:
       bin: nmap
       args:
         - "-sV"
+        - "-T4"
         - "-Pn"
         - "--script"
         - "ssl-enum-ciphers,ssl-cert"
@@ -213,7 +217,7 @@ enrichers:
         - "{{.Node.ip}}"
       timeout: 5m
       retries: 1
-    concurrency: 4
+    concurrency: 6
     enabled: true
 
   # --- TLS / Certificate ---
