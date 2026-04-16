@@ -36,6 +36,8 @@ const indexHTML = `<!doctype html>
     .toolbar input { border: 1px solid var(--line); background: #fff; border-radius: 10px; padding: 7px 10px; min-width: 280px; }
     .toolbar select { border: 1px solid var(--line); background: #fff; border-radius: 10px; padding: 7px 10px; }
     .tiny { font-size: 12px; }
+    .dns-toggle { background: transparent; color: var(--ink); border: 0; padding: 0; cursor: pointer; font-weight: 600; }
+    .dns-caret { display: inline-block; width: 14px; color: var(--muted); }
   </style>
 </head>
 <body>
@@ -106,9 +108,12 @@ const indexHTML = `<!doctype html>
     </div>
 
     <div class="card" style="margin-top: 14px;">
-      <strong>Recent Services</strong>
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap: wrap;">
+        <strong>Recent Services (Grouped by DNS)</strong>
+        <span class="tiny muted">Click "Expand" to show services for a DNS name.</span>
+      </div>
       <table style="margin-top:8px;">
-        <thead><tr><th>DNS</th><th>Service</th><th>Product</th><th>Header/Banner</th><th>TLS</th><th>Last Seen</th></tr></thead>
+        <thead><tr><th>DNS</th><th>Service Count</th><th>Last Seen</th></tr></thead>
         <tbody id="serviceRows"></tbody>
       </table>
     </div>
@@ -189,6 +194,8 @@ const indexHTML = `<!doctype html>
     let monitoredSet = new Set();
     let monitorItems = [];
     let changePage = { limit: 50, offset: 0, has_more: false };
+    let expandedServiceGroups = new Set();
+    let serviceGroupMap = {};
 
     async function addMonitor(url) {
       const label = prompt('Monitor label (optional):', 'asm-js');
@@ -349,11 +356,75 @@ const indexHTML = `<!doctype html>
     }
 
     async function loadServices() {
-      const data = await j('/api/data/services?limit=25');
+      const data = await j('/api/data/services?limit=200');
       const rows = document.getElementById('serviceRows');
-      rows.innerHTML = (data.items || []).map(s =>
-        '<tr><td><strong>' + esc(s.dns_name || '(no dns)') + '</strong><div class="tiny muted">aliases: ' + esc(s.dns_count || 0) + '</div></td><td><strong>' + esc(s.service || ((s.ip || '') + ':' + (s.port || 0))) + '</strong><div class="tiny muted">' + esc(s.ip || '') + '</div></td><td>' + esc(s.product || '') + '</td><td class="tiny">' + esc((s.server || s.banner || '-')) + '</td><td>' + esc(s.tls ? 'yes' : 'no') + '</td><td class="tiny">' + esc(s.last_seen || '') + '</td></tr>'
-      ).join('');
+      const items = data.items || [];
+      const groups = new Map();
+
+      for (const s of items) {
+        const key = String(s.dns_name || '').trim() || '(no dns)';
+        const arr = groups.get(key) || [];
+        arr.push(s);
+        groups.set(key, arr);
+      }
+
+      const ordered = Array.from(groups.entries()).sort((a, b) => {
+        const aTs = Math.max(...a[1].map(x => Date.parse(String(x.last_seen || '')) || 0));
+        const bTs = Math.max(...b[1].map(x => Date.parse(String(x.last_seen || '')) || 0));
+        return bTs - aTs;
+      });
+
+      const html = [];
+      serviceGroupMap = {};
+      for (let i = 0; i < ordered.length; i++) {
+        const dns = ordered[i][0];
+        const services = ordered[i][1];
+        const groupId = 'g' + i;
+        serviceGroupMap[groupId] = dns;
+        const expanded = expandedServiceGroups.has(groupId);
+        const lastSeen = services
+          .map(s => String(s.last_seen || ''))
+          .filter(Boolean)
+          .sort()
+          .reverse()[0] || '';
+        const caret = expanded ? '&#9662;' : '&#9656;';
+
+        html.push(
+          '<tr>' +
+            '<td><button class="dns-toggle" onclick="toggleServiceGroupById(\'' + groupId + '\')"><span class="dns-caret">' + caret + '</span>' + esc(dns) + '</button></td>' +
+            '<td>' + esc(services.length) + '</td>' +
+            '<td class="tiny">' + esc(lastSeen) + '</td>' +
+          '</tr>'
+        );
+
+        if (expanded) {
+          for (const s of services) {
+            html.push(
+              '<tr>' +
+                '<td class="tiny muted">&nbsp;&nbsp;service</td>' +
+                '<td colspan="3" class="tiny">' +
+                  '<strong>' + esc(s.service || ((s.ip || '') + ':' + (s.port || 0))) + '</strong>' +
+                  ' | product=' + esc(s.product || '-') +
+                  ' | tls=' + esc(s.tls ? 'yes' : 'no') +
+                  ' | banner=' + esc(s.server || s.banner || '-') +
+                '</td>' +
+              '</tr>'
+            );
+          }
+        }
+      }
+
+      rows.innerHTML = html.join('');
+    }
+
+    function toggleServiceGroupById(groupId) {
+      if (!serviceGroupMap[groupId]) return;
+      if (expandedServiceGroups.has(groupId)) {
+        expandedServiceGroups.delete(groupId);
+      } else {
+        expandedServiceGroups.add(groupId);
+      }
+      loadServices();
     }
 
     function applyChangeFilters() {
