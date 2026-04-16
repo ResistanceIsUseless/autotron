@@ -302,50 +302,75 @@ LIMIT $limit`
 // eligible node pool.
 type EnricherProgress struct {
 	Enricher string  `json:"enricher"`
+	NodeType string  `json:"node_type"`
 	Done     int64   `json:"done"`
 	Total    int64   `json:"total"`
 	Pct      float64 `json:"pct"`
 }
 
-// ListEnricherProgress returns per-enricher completion stats by comparing
-// the enriched_by array on nodes against the set of enabled enricher names.
-func (c *Client) ListEnricherProgress(ctx context.Context, enricherNames []string) ([]EnricherProgress, error) {
+// EnricherInfo pairs an enricher name with the node type it subscribes to.
+type EnricherInfo struct {
+	Name     string
+	NodeType string
+}
+
+// ListEnricherProgress returns per-enricher completion stats by matching
+// each enricher against only the node type it subscribes to.
+func (c *Client) ListEnricherProgress(ctx context.Context, enrichers []EnricherInfo) ([]EnricherProgress, error) {
 	session := c.driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeRead})
 	defer session.Close(ctx)
 
-	query := `
-UNWIND $names AS ename
-MATCH (n)
-WHERE n.enriched_by IS NOT NULL
-WITH ename, count(n) AS total,
-     sum(CASE WHEN ename IN n.enriched_by THEN 1 ELSE 0 END) AS done
-WHERE total > 0
-RETURN ename AS enricher, done, total
-ORDER BY enricher`
+	// Build a list of {name, node_type} maps for the UNWIND.
+	var items []map[string]any
+	for _, e := range enrichers {
+		items = append(items, map[string]any{"name": e.Name, "node_type": e.NodeType})
+	}
+	if len(items) == 0 {
+		return nil, nil
+	}
 
-	result, err := session.Run(ctx, query, map[string]any{"names": enricherNames})
-	if err != nil {
-		return nil, fmt.Errorf("query enricher progress: %w", err)
+	// We need separate queries per node type because Cypher doesn't support
+	// dynamic labels in MATCH. Group enrichers by node type, run one query
+	// per group, then merge.
+	byType := make(map[string][]string)
+	for _, e := range enrichers {
+		byType[e.NodeType] = append(byType[e.NodeType], e.Name)
 	}
 
 	var out []EnricherProgress
-	for result.Next(ctx) {
-		rec := result.Record()
-		done := toInt64(recordValue(rec, "done"))
-		total := toInt64(recordValue(rec, "total"))
-		pct := float64(0)
-		if total > 0 {
-			pct = float64(done) / float64(total) * 100
+	for nodeType, names := range byType {
+		query := fmt.Sprintf(`
+UNWIND $names AS ename
+MATCH (n:%s)
+WITH ename, count(n) AS total,
+     sum(CASE WHEN ename IN coalesce(n.enriched_by, []) THEN 1 ELSE 0 END) AS done
+RETURN ename AS enricher, done, total
+ORDER BY enricher`, nodeType)
+
+		result, err := session.Run(ctx, query, map[string]any{"names": names})
+		if err != nil {
+			return nil, fmt.Errorf("query enricher progress for %s: %w", nodeType, err)
 		}
-		out = append(out, EnricherProgress{
-			Enricher: fmt.Sprintf("%v", recordValue(rec, "enricher")),
-			Done:     done,
-			Total:    total,
-			Pct:      pct,
-		})
-	}
-	if err := result.Err(); err != nil {
-		return nil, fmt.Errorf("query enricher progress: %w", err)
+
+		for result.Next(ctx) {
+			rec := result.Record()
+			done := toInt64(recordValue(rec, "done"))
+			total := toInt64(recordValue(rec, "total"))
+			pct := float64(0)
+			if total > 0 {
+				pct = float64(done) / float64(total) * 100
+			}
+			out = append(out, EnricherProgress{
+				Enricher: fmt.Sprintf("%v", recordValue(rec, "enricher")),
+				NodeType: nodeType,
+				Done:     done,
+				Total:    total,
+				Pct:      pct,
+			})
+		}
+		if err := result.Err(); err != nil {
+			return nil, fmt.Errorf("query enricher progress for %s: %w", nodeType, err)
+		}
 	}
 	return out, nil
 }

@@ -16,23 +16,23 @@ import (
 )
 
 type Server struct {
-	graphClient   *graph.Client
-	logger        *slog.Logger
-	jsreconBase   string
-	client        *http.Client
-	enricherNames []string
+	graphClient  *graph.Client
+	logger       *slog.Logger
+	jsreconBase  string
+	client       *http.Client
+	enricherInfo []graph.EnricherInfo
 }
 
-func NewServer(graphClient *graph.Client, logger *slog.Logger, jsreconBase string, enricherNames ...string) *Server {
+func NewServer(graphClient *graph.Client, logger *slog.Logger, jsreconBase string, enrichers ...graph.EnricherInfo) *Server {
 	if strings.TrimSpace(jsreconBase) == "" {
 		jsreconBase = "http://localhost:37232"
 	}
 	return &Server{
-		graphClient:   graphClient,
-		logger:        logger.With("component", "webui"),
-		jsreconBase:   strings.TrimRight(jsreconBase, "/"),
-		client:        &http.Client{Timeout: 30 * time.Second},
-		enricherNames: enricherNames,
+		graphClient:  graphClient,
+		logger:       logger.With("component", "webui"),
+		jsreconBase:  strings.TrimRight(jsreconBase, "/"),
+		client:       &http.Client{Timeout: 30 * time.Second},
+		enricherInfo: enrichers,
 	}
 }
 
@@ -401,7 +401,7 @@ func parseInt(s string) (int, error) {
 
 func (s *Server) handleEnricherProgress(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	items, err := s.graphClient.ListEnricherProgress(ctx, s.enricherNames)
+	items, err := s.graphClient.ListEnricherProgress(ctx, s.enricherInfo)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return

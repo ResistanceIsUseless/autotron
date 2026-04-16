@@ -100,6 +100,27 @@ Neo4j graph state after 2 interrupted runs (bash timeout, not tool failure):
 - [x] Added minimal Go-served single-page UI for JS review + monitor workflow
 - [ ] Validate with live Neo4j + jsRecon server and refine UX
 
+## Latest Session Notes (2026-04-15)
+
+- [x] Confirmed long-running scan still active (`scan_run_id=38896900-3d79-4967-8ca0-f319cf5e97f8`, PID 57844)
+- [x] Diagnosed `nikto_root_https` jobs returning 0 findings with near-empty output artifacts
+- [x] Updated Nikto enrichers to force stdout JSON emission by adding `-output -`
+  - `configs/enrichers.yaml`: `nikto_root_https`
+  - `configs/enrichers.yaml`: `nikto_scan`
+- [ ] Restart scan to apply updated Nikto command args and verify findings ingestion
+
+## Latest Session Notes (2026-04-16)
+
+- [x] Confirmed long-running scan status from process + Neo4j ScanRun state
+- [x] Applied nmap throughput tuning in enricher config
+  - added `-T4` for: `nmap_ssh`, `nmap_smb`, `nmap_http_scripts`, `nmap_ssl_enum`
+  - raised concurrency for nmap jobs:
+    - `nmap_http_scripts`: 4 -> 8
+    - `nmap_ssh`: 4 -> 6
+    - `nmap_smb`: 4 -> 6
+    - `nmap_ssl_enum`: 4 -> 6
+- [ ] Restart active scan so new nmap settings take effect
+
 ## How to Run
 
 ```bash
