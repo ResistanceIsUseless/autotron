@@ -189,8 +189,8 @@ enrichers:
         - "-oX"
         - "-"
         - "{{.Node.ip}}"
-      timeout: 10m
-      retries: 1
+      timeout: 4m
+      retries: 0
     concurrency: 4
     enabled: true
 
@@ -453,6 +453,47 @@ enrichers:
 
   # --- Nuclei (multiple invocations) ---
 
+  - name: nuclei_root_https
+    parser: nuclei_jsonl
+    subscribes:
+      node_type: Subdomain
+      match: "-[:RESOLVES_TO]->(i:IP)-[:HAS_SERVICE]->(svc:Service)"
+      returns:
+        - "svc.port AS port"
+        - "svc.product AS service_product"
+      predicate: "n.in_scope = true AND svc.product IN ['http', 'https'] AND svc.port = 443"
+    command:
+      bin: nuclei
+      args:
+        - "-u"
+        - "https://{{.Node.fqdn}}"
+        - "-jsonl"
+        - "-severity"
+        - "low,medium,high,critical"
+      timeout: 20m
+      retries: 1
+    concurrency: 2
+    enabled: true
+
+  - name: nikto_root_https
+    parser: web_vuln_generic
+    subscribes:
+      node_type: Subdomain
+      match: "-[:RESOLVES_TO]->(i:IP)-[:HAS_SERVICE]->(svc:Service)"
+      returns:
+        - "svc.port AS port"
+        - "svc.product AS service_product"
+      predicate: "n.in_scope = true AND svc.product IN ['http', 'https'] AND svc.port = 443"
+    command:
+      bin: sh
+      args:
+        - "-c"
+        - "b=$(mktemp /tmp/nikto-root-XXXXXX); nikto -h \"https://{{.Node.fqdn}}\" -Format json -output \"$b\" -maxtime 6m -Tuning 2,3,b,e -ask no -nointeractive -timeout 8 >/dev/null 2>/dev/null; if [ -f \"$b.json\" ]; then cat \"$b.json\"; elif [ -f \"$b\" ]; then cat \"$b\"; fi; rm -f \"$b\" \"$b.json\""
+      timeout: 8m
+      retries: 0
+    concurrency: 1
+    enabled: true
+
   - name: nuclei_tech
     parser: nuclei_jsonl
     subscribes:
@@ -469,6 +510,51 @@ enrichers:
       timeout: 30m
       retries: 1
     concurrency: 2
+    enabled: true
+
+  - name: nuclei_server_variant_url
+    parser: nuclei_jsonl
+    subscribes:
+      node_type: URL
+      predicate: >
+        n.status_code = 200 AND n.path <> '/' AND coalesce(n.server, '') <> '' AND
+        EXISTS {
+          MATCH (u0:URL)
+          WHERE u0.host = n.host AND u0.path = '/' AND coalesce(u0.server, '') <> ''
+            AND toLower(coalesce(u0.server, '')) <> toLower(coalesce(n.server, ''))
+        }
+    command:
+      bin: nuclei
+      args:
+        - "-u"
+        - "{{.Node.url}}"
+        - "-jsonl"
+        - "-severity"
+        - "low,medium,high,critical"
+      timeout: 20m
+      retries: 1
+    concurrency: 2
+    enabled: true
+
+  - name: nikto_server_variant_url
+    parser: web_vuln_generic
+    subscribes:
+      node_type: URL
+      predicate: >
+        n.status_code = 200 AND n.path <> '/' AND coalesce(n.server, '') <> '' AND
+        EXISTS {
+          MATCH (u0:URL)
+          WHERE u0.host = n.host AND u0.path = '/' AND coalesce(u0.server, '') <> ''
+            AND toLower(coalesce(u0.server, '')) <> toLower(coalesce(n.server, ''))
+        }
+    command:
+      bin: sh
+      args:
+        - "-c"
+        - "b=$(mktemp /tmp/nikto-sv-XXXXXX); nikto -h \"{{.Node.url}}\" -Format json -output \"$b\" -maxtime 6m -Tuning 2,3,b,e -ask no -nointeractive -timeout 8 >/dev/null 2>/dev/null; if [ -f \"$b.json\" ]; then cat \"$b.json\"; elif [ -f \"$b\" ]; then cat \"$b\"; fi; rm -f \"$b\" \"$b.json\""
+      timeout: 8m
+      retries: 0
+    concurrency: 1
     enabled: true
 
   - name: nuclei_network
@@ -800,11 +886,13 @@ enrichers:
       node_type: URL
       predicate: "n.status_code = 200"
     command:
-      bin: nikto
+      bin: sh
       # Nikto 2.5/2.6 JSON output shape
-      args: ["-h", "{{.Node.url}}", "-Format", "json"]
-      timeout: 30m
-    concurrency: 2
+      args:
+        - "-c"
+        - "b=$(mktemp /tmp/nikto-url-XXXXXX); nikto -h \"{{.Node.url}}\" -Format json -output \"$b\" -maxtime 6m -Tuning 2,3,b,e -ask no -nointeractive -timeout 8 >/dev/null 2>/dev/null; if [ -f \"$b.json\" ]; then cat \"$b.json\"; elif [ -f \"$b\" ]; then cat \"$b\"; fi; rm -f \"$b\" \"$b.json\""
+      timeout: 8m
+      concurrency: 2
     enabled: true
 
   - name: wapiti_scan
@@ -1243,7 +1331,7 @@ enrichers:
       timeout: 10m
       retries: 1
     concurrency: 2
-    enabled: false
+    enabled: true
 
   - name: cache_poison_probe
     parser: http_advanced_vuln_json
@@ -1261,7 +1349,7 @@ enrichers:
       timeout: 10m
       retries: 1
     concurrency: 2
-    enabled: false
+    enabled: true
 
   - name: waf_diff_probe
     parser: http_advanced_vuln_json
@@ -1279,7 +1367,7 @@ enrichers:
       timeout: 10m
       retries: 1
     concurrency: 2
-    enabled: false
+    enabled: true
 
   - name: ssrf_gadget_discovery
     parser: http_advanced_vuln_json
@@ -1297,7 +1385,7 @@ enrichers:
       timeout: 10m
       retries: 1
     concurrency: 2
-    enabled: false
+    enabled: true
 
   - name: idor_candidate_mapper
     parser: http_advanced_vuln_json
@@ -1317,7 +1405,7 @@ enrichers:
       timeout: 10m
       retries: 1
     concurrency: 2
-    enabled: false
+    enabled: true
 
   - name: csrf_policy_audit
     parser: http_advanced_vuln_json
@@ -1335,7 +1423,7 @@ enrichers:
       timeout: 10m
       retries: 1
     concurrency: 2
-    enabled: false
+    enabled: true
 
   # --- Mail posture ---
 

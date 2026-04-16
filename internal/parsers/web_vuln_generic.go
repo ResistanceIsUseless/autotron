@@ -111,6 +111,9 @@ func (p *webVulnGenericParser) Parse(ctx context.Context, trigger graph.Node, st
 
 	fullOutput := strings.Join(lines, "\n")
 	trimmed := strings.TrimSpace(fullOutput)
+	if idx := strings.IndexAny(trimmed, "{["); idx > 0 {
+		trimmed = strings.TrimSpace(trimmed[idx:])
+	}
 
 	// Try nikto format (object with "vulnerabilities" array).
 	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
