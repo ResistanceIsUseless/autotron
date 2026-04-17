@@ -46,6 +46,8 @@ type ServiceView struct {
 	IP       string `json:"ip"`
 	Port     int64  `json:"port"`
 	Product  string `json:"product"`
+	Version  string `json:"version"`
+	Status   string `json:"status"`
 	TLS      bool   `json:"tls"`
 	Server   string `json:"server"`
 	Banner   string `json:"banner"`
@@ -251,6 +253,8 @@ WITH s,
      coalesce(s.ip, '') AS ip,
      toInteger(coalesce(s.port, 0)) AS port,
      coalesce(s.product, '') AS product,
+     coalesce(s.version, '') AS version,
+     coalesce(s.status, 'open') AS status,
      coalesce(s.tls, false) AS tls,
      coalesce(s.server, '') AS server,
      coalesce(s.banner, '') AS banner,
@@ -260,6 +264,8 @@ RETURN
   ip,
   port,
   product,
+  version,
+  status,
   tls,
   server,
   banner,
@@ -286,6 +292,8 @@ LIMIT $limit`
 			IP:       fmt.Sprintf("%v", recordValue(rec, "ip")),
 			Port:     port,
 			Product:  fmt.Sprintf("%v", recordValue(rec, "product")),
+			Version:  fmt.Sprintf("%v", recordValue(rec, "version")),
+			Status:   fmt.Sprintf("%v", recordValue(rec, "status")),
 			TLS:      toBool(recordValue(rec, "tls")),
 			Server:   fmt.Sprintf("%v", recordValue(rec, "server")),
 			Banner:   fmt.Sprintf("%v", recordValue(rec, "banner")),
@@ -395,7 +403,7 @@ func (c *Client) ListRecentActivity(ctx context.Context, limit int) ([]RecentAct
 
 	query := `
 MATCH (n)
-WHERE n.last_seen IS NOT NULL AND labels(n)[0] IS NOT NULL
+WHERE n.last_seen IS NOT NULL AND labels(n)[0] IS NOT NULL AND NOT 'IP' IN labels(n)
 WITH labels(n)[0] AS lbl, n
 ORDER BY n.last_seen DESC
 LIMIT $limit
@@ -404,11 +412,10 @@ RETURN
   CASE lbl
     WHEN 'Finding' THEN coalesce(n.title, n.type, 'finding')
     WHEN 'Subdomain' THEN coalesce(n.fqdn, '')
-    WHEN 'IP' THEN coalesce(n.ip, '')
     WHEN 'Service' THEN coalesce(n.fqdn, '') + ':' + toString(coalesce(n.port, 0))
     WHEN 'URL' THEN coalesce(n.url, '')
     WHEN 'Domain' THEN coalesce(n.fqdn, '')
-    ELSE coalesce(n.id, n.fqdn, n.ip, n.url, '')
+    ELSE coalesce(n.id, n.fqdn, n.url, '')
   END AS label,
   CASE lbl
     WHEN 'Finding' THEN coalesce(n.severity, '') + ' / ' + coalesce(n.tool, '')

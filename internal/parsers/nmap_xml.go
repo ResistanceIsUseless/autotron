@@ -256,27 +256,72 @@ func (p *nmapXMLParser) scriptToFinding(script nmapScript, ipPort, ip string, po
 }
 
 // classifyScriptSeverity assigns a severity based on the NSE script ID
-// and output content. Conservative defaults — most are "info".
+// and output content. Script-aware logic ensures informational results
+// (like "ssl cert exists") are not misclassified as vulnerabilities.
 func (p *nmapXMLParser) classifyScriptSeverity(scriptID, output string) string {
 	lower := strings.ToLower(output)
 
-	// Known vulnerability scripts.
-	if strings.Contains(scriptID, "vuln") {
+	// Known vulnerability scripts (e.g., smb-vuln-ms17-010, ssl-heartbleed).
+	if strings.Contains(scriptID, "vuln") || scriptID == "ssl-heartbleed" || scriptID == "ssl-poodle" {
 		if strings.Contains(lower, "vulnerable") || strings.Contains(lower, "exploitable") {
 			return "high"
+		}
+		if strings.Contains(lower, "not vulnerable") || strings.Contains(lower, "patched") {
+			return "info"
 		}
 		return "medium"
 	}
 
-	// Weak crypto / deprecated protocols.
-	weakIndicators := []string{
-		"des-cbc", "rc4", "md5", "sha1", "sslv2", "sslv3", "tlsv1.0",
-		"diffie-hellman-group1", "diffie-hellman-group14-sha1",
-	}
-	for _, indicator := range weakIndicators {
-		if strings.Contains(lower, indicator) {
+	// ssl-cert: only flag actual certificate problems, not mere existence.
+	if scriptID == "ssl-cert" {
+		// Expired or not-yet-valid certificate.
+		if strings.Contains(lower, "expired") || strings.Contains(lower, "not valid before") {
 			return "medium"
 		}
+		// Self-signed certificate.
+		if strings.Contains(lower, "self-signed") || strings.Contains(lower, "self signed") {
+			return "low"
+		}
+		// Weak signature algorithm (SHA1 or MD5 in the actual signature, not just fingerprint).
+		if strings.Contains(lower, "sha1withrsa") || strings.Contains(lower, "md5withrsa") || strings.Contains(lower, "md2withrsa") {
+			return "low"
+		}
+		// Weak RSA key (< 2048 bits).
+		if strings.Contains(lower, "rsa key: 1024") || strings.Contains(lower, "rsa key: 512") {
+			return "medium"
+		}
+		// Default: cert exists — purely informational.
+		return "info"
+	}
+
+	// ssl-enum-ciphers: weak ciphers/protocols are real findings.
+	if scriptID == "ssl-enum-ciphers" {
+		weakCipherIndicators := []string{
+			"des-cbc", "rc4", "export", "null", "anon",
+			"sslv2", "sslv3", "tlsv1.0",
+			"diffie-hellman-group1", "diffie-hellman-group14-sha1",
+		}
+		for _, indicator := range weakCipherIndicators {
+			if strings.Contains(lower, indicator) {
+				return "medium"
+			}
+		}
+		// TLSv1.1 is deprecated but less critical than SSLv3/TLSv1.0.
+		if strings.Contains(lower, "tlsv1.1") {
+			return "low"
+		}
+		return "info"
+	}
+
+	// ssh2-enum-algos: flag weak SSH algorithms.
+	if scriptID == "ssh2-enum-algos" {
+		weakSSH := []string{"des-cbc", "rc4", "arcfour", "diffie-hellman-group1", "hmac-md5", "hmac-sha1-96"}
+		for _, indicator := range weakSSH {
+			if strings.Contains(lower, indicator) {
+				return "low"
+			}
+		}
+		return "info"
 	}
 
 	// SMB enumeration / info leaks.
@@ -284,6 +329,27 @@ func (p *nmapXMLParser) classifyScriptSeverity(scriptID, output string) string {
 		return "low"
 	}
 
+	// Anonymous access findings.
+	if scriptID == "ftp-anon" || scriptID == "smb-security-mode" {
+		if strings.Contains(lower, "anonymous") || strings.Contains(lower, "guest") {
+			return "medium"
+		}
+		return "info"
+	}
+
+	// Banner / header scripts are purely informational.
+	infoScripts := []string{
+		"http-server-header", "http-title", "http-robots.txt",
+		"http-methods", "http-headers", "ssh-hostkey",
+		"banner", "dns-nsid", "nbstat",
+	}
+	for _, s := range infoScripts {
+		if scriptID == s {
+			return "info"
+		}
+	}
+
+	// Default: unknown scripts get info unless they look suspicious.
 	return "info"
 }
 

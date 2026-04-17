@@ -170,19 +170,19 @@ const indexHTML = `<!doctype html>
         <span class="card-title">Top Findings</span>
       </div>
       <table>
-        <thead><tr><th>Severity</th><th>Title</th><th>Tools</th><th>Assets</th></tr></thead>
+        <thead><tr><th style="width:70px">Severity</th><th>Finding</th><th>Affected Hosts</th><th style="width:60px">Count</th><th style="width:80px">Seen</th></tr></thead>
         <tbody id="findingRows"></tbody>
       </table>
     </div>
 
-    <!-- Services grouped by DNS -->
+    <!-- Hosts -->
     <div class="card section">
       <div class="card-header">
-        <span class="card-title">Services by DNS</span>
+        <span class="card-title">Hosts</span>
         <span class="tiny" style="color:var(--muted)">click to expand</span>
       </div>
       <table>
-        <thead><tr><th>DNS Name</th><th>Count</th><th>Last Seen</th></tr></thead>
+        <thead><tr><th>Host</th><th>Ports</th><th>Last Seen</th></tr></thead>
         <tbody id="serviceRows"></tbody>
       </table>
     </div>
@@ -339,14 +339,22 @@ const indexHTML = `<!doctype html>
 
     async function loadFindings() {
       const data = await j('/api/top-findings');
-      document.getElementById('findingRows').innerHTML = (data.items || []).map(f =>
-        '<tr>' +
+      document.getElementById('findingRows').innerHTML = (data.items || []).map(f => {
+        const hosts = (f.assets||[]).slice(0,5).map(a => '<div>' + esc(a) + '</div>').join('');
+        const more = (f.asset_count||0) > 5 ? '<div class="tiny" style="color:var(--muted)">+' + ((f.asset_count||0)-5) + ' more</div>' : '';
+        const typeStr = (f.type||'').replace(/^cve-/i,'').toUpperCase();
+        const toolStr = (f.tools||[]).join(', ');
+        return '<tr>' +
           '<td><span class="pill ' + sevClass(f.severity) + '">' + esc(f.severity) + '</span></td>' +
-          '<td>' + esc(f.title) + '<div class="tiny" style="color:var(--muted)">' + esc((f.assets||[]).slice(0,3).join(' | ')) + '</div></td>' +
-          '<td class="tiny">' + esc((f.tools||[]).join(', ')) + '</td>' +
+          '<td><div style="font-weight:600;color:var(--ink)">' + esc(f.title) + '</div>' +
+            (typeStr ? '<div class="tiny" style="color:var(--accent2)">' + esc(typeStr) + '</div>' : '') +
+            '<div class="tiny" style="color:var(--muted)">' + esc(toolStr) + ' &middot; ' + esc(f.confidence||'') + '</div>' +
+          '</td>' +
+          '<td class="tiny">' + hosts + more + '</td>' +
           '<td>' + esc(f.asset_count) + '</td>' +
-        '</tr>'
-      ).join('');
+          '<td class="tiny">' + relTime(f.last_seen) + '</td>' +
+        '</tr>';
+      }).join('');
     }
 
     async function loadServices() {
@@ -370,13 +378,29 @@ const indexHTML = `<!doctype html>
         serviceGroupMap[gid] = dns;
         const exp = expandedServiceGroups.has(gid);
         const last = services.map(s=>s.last_seen||'').filter(Boolean).sort().reverse()[0]||'';
-        html.push('<tr><td><button class="dns-toggle" onclick="toggleSG(\'' + gid + '\')"><span class="dns-caret">' + (exp?'&#9662;':'&#9656;') + '</span>' + esc(dns) + '</button></td><td>' + services.length + '</td><td class="tiny">' + relTime(last) + '</td></tr>');
+        const ip0 = services[0]?.ip || '';
+        html.push('<tr><td><button class="dns-toggle" onclick="toggleSG(\'' + gid + '\')"><span class="dns-caret">' + (exp?'&#9662;':'&#9656;') + '</span>' + esc(dns) + '</button></td><td class="tiny">' + services.map(s=>s.port).join(', ') + '</td><td class="tiny">' + relTime(last) + '</td></tr>');
         if (exp) {
+          html.push('<tr><td colspan="3" style="padding:0 0 0 28px;border-bottom:none;">' +
+            '<table style="width:100%;margin:2px 0 6px 0;"><thead><tr>' +
+            '<th style="width:80px">PORT</th><th style="width:60px">STATE</th><th style="width:100px">SERVICE</th><th>VERSION</th>' +
+            '</tr></thead><tbody>');
           for (const s of services) {
-            html.push('<tr><td class="tiny" style="color:var(--muted);padding-left:24px;">&#8627;</td><td colspan="2" class="tiny">' +
-              esc(s.ip||'') + ':' + esc(s.port||0) + ' | ' + esc(s.product||'-') + ' | tls=' + (s.tls?'yes':'no') + ' | ' + esc(s.server||s.banner||'-') +
-            '</td></tr>');
+            const proto = s.tls ? 'tcp/tls' : 'tcp';
+            const svc = s.product || (s.tls ? 'https' : 'http');
+            const ver = [s.version, s.server, s.banner].filter(Boolean).filter((v,i,a) => a.indexOf(v)===i).join(' ');
+            const stateColor = s.status === 'open' ? 'var(--green)' : s.status === 'filtered' ? 'var(--yellow)' : 'var(--muted)';
+            html.push('<tr>' +
+              '<td class="tiny"><span style="color:var(--accent2)">' + esc(s.port) + '/' + proto + '</span></td>' +
+              '<td class="tiny"><span style="color:' + stateColor + '">' + esc(s.status||'open') + '</span></td>' +
+              '<td class="tiny">' + esc(svc) + '</td>' +
+              '<td class="tiny" style="color:var(--ink2)">' + esc(ver||'-') + '</td>' +
+            '</tr>');
           }
+          if (ip0) {
+            html.push('<tr><td colspan="4" class="tiny" style="color:var(--muted);border-bottom:none;padding-top:2px;">IP: ' + esc(ip0) + '</td></tr>');
+          }
+          html.push('</tbody></table></td></tr>');
         }
       }
       document.getElementById('serviceRows').innerHTML = html.join('');
