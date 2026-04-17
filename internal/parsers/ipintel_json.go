@@ -62,10 +62,12 @@ func (p *ipintelJSONParser) Parse(ctx context.Context, trigger graph.Node, stdou
 		return Result{}, fmt.Errorf("decode ipintel JSON: %w", err)
 	}
 
-	// This parser does property enrichment on an existing IP node.
-	// It doesn't create new nodes — it updates the triggering IP.
-	props := map[string]any{
-		"address": output.IP,
+	// This parser enriches the triggering Subdomain node with IP intelligence
+	// metadata. The IP intel data is stored as properties on the Subdomain.
+	props := map[string]any{}
+
+	if output.IP != "" {
+		props["ipintel_ip"] = output.IP
 	}
 
 	if output.ASN != nil {
@@ -95,10 +97,13 @@ func (p *ipintelJSONParser) Parse(ctx context.Context, trigger graph.Node, stdou
 		props["abuse_contact"] = output.Abuse.Contact
 	}
 
+	// Enrich the triggering Subdomain node.
+	props["fqdn"] = trigger.PrimaryKey
+
 	var result Result
 	result.Nodes = append(result.Nodes, graph.Node{
-		Type:       graph.NodeIP,
-		PrimaryKey: output.IP,
+		Type:       graph.NodeSubdomain,
+		PrimaryKey: trigger.PrimaryKey,
 		Props:      props,
 	})
 

@@ -50,17 +50,22 @@ func TestDNSResolverParser_JSONAndPlain(t *testing.T) {
 		t.Fatalf("parse failed: %v", err)
 	}
 
-	if !hasNode(result.Nodes, graph.NodeIP, "1.2.3.4") {
-		t.Fatal("expected resolved IP node")
+	if !hasNode(result.Nodes, graph.NodeSubdomain, "api.example.com") {
+		t.Fatal("expected subdomain node with IPs as metadata")
 	}
 	if !hasNode(result.Nodes, graph.NodeSubdomain, "edge.example.net") {
 		t.Fatal("expected cname target subdomain node")
 	}
-	if !hasEdgeType(result.Edges, graph.RelRESOLVES_TO) {
-		t.Fatal("expected RESOLVES_TO edge")
-	}
 	if !hasEdgeType(result.Edges, graph.RelCNAME) {
 		t.Fatal("expected CNAME edge")
+	}
+	// Verify IPs are stored as metadata on subdomain nodes, not as separate IP nodes.
+	for _, n := range result.Nodes {
+		if n.Type == graph.NodeSubdomain && n.PrimaryKey == "api.example.com" {
+			if ips, ok := n.Props["ips"].(string); !ok || ips == "" {
+				t.Fatal("expected ips property on subdomain node")
+			}
+		}
 	}
 }
 
@@ -75,15 +80,12 @@ func TestPortScanParser_JSONAndFallback(t *testing.T) {
 		t.Fatalf("parse failed: %v", err)
 	}
 
-	if !hasNode(result.Nodes, graph.NodeIP, "1.2.3.4") {
-		t.Fatal("expected IP node")
-	}
 	if !hasNode(result.Nodes, graph.NodeService, "api.example.com:443") || !hasNode(result.Nodes, graph.NodeService, "api.example.com:80") {
 		t.Fatal("expected service nodes for 443 and 80")
 	}
-	// 2 Subdomain→HAS_SERVICE + 1 IP→HAS_SERVICE (only JSON line has IP) = 3 edges
-	if len(result.Edges) != 3 {
-		t.Fatalf("expected 3 HAS_SERVICE edges, got %d", len(result.Edges))
+	// Only Subdomain→HAS_SERVICE edges now (no IP nodes/edges)
+	if len(result.Edges) != 2 {
+		t.Fatalf("expected 2 HAS_SERVICE edges, got %d", len(result.Edges))
 	}
 }
 
@@ -356,12 +358,13 @@ func TestSubscopeJSONParser_ResolvedAndDiscoveredDomains(t *testing.T) {
 		t.Fatal("expected CNAME target subdomain edge.vendor.net")
 	}
 
-	// Should have IP nodes for public IPs
-	if !hasNode(result.Nodes, graph.NodeIP, "1.2.3.4") {
-		t.Fatal("expected resolved IP 1.2.3.4")
-	}
-	if !hasNode(result.Nodes, graph.NodeIP, "5.6.7.8") {
-		t.Fatal("expected resolved IP 5.6.7.8")
+	// IPs should be stored as metadata on subdomain nodes, not as separate IP nodes.
+	for _, n := range result.Nodes {
+		if n.Type == graph.NodeSubdomain && n.PrimaryKey == "api.example.com" {
+			if ips, ok := n.Props["ips"].(string); !ok || !strings.Contains(ips, "1.2.3.4") {
+				t.Fatal("expected ips property containing 1.2.3.4 on api.example.com subdomain")
+			}
+		}
 	}
 
 	// Cloud findings: api has AWS-General, cdn has AWS-CloudFront

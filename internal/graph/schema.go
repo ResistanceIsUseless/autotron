@@ -11,7 +11,6 @@ type NodeType string
 const (
 	NodeDomain      NodeType = "Domain"
 	NodeSubdomain   NodeType = "Subdomain"
-	NodeIP          NodeType = "IP"
 	NodeService     NodeType = "Service"
 	NodeCertificate NodeType = "Certificate"
 	NodeURL         NodeType = "URL"
@@ -29,7 +28,6 @@ type RelType string
 const (
 	RelHAS           RelType = "HAS"
 	RelCNAME         RelType = "CNAME"
-	RelRESOLVES_TO   RelType = "RESOLVES_TO"
 	RelHAS_SERVICE   RelType = "HAS_SERVICE"
 	RelPRESENTS      RelType = "PRESENTS"
 	RelSERVES        RelType = "SERVES"
@@ -127,8 +125,6 @@ func PrimaryKeyField(nt NodeType) string {
 		return "fqdn"
 	case NodeSubdomain:
 		return "fqdn"
-	case NodeIP:
-		return "address"
 	case NodeService:
 		return "fqdn_port"
 	case NodeCertificate:
@@ -161,7 +157,8 @@ func Constraints() []string {
 
 		`CREATE CONSTRAINT domain_fqdn IF NOT EXISTS FOR (n:Domain) REQUIRE n.fqdn IS UNIQUE`,
 		`CREATE CONSTRAINT subdomain_fqdn IF NOT EXISTS FOR (n:Subdomain) REQUIRE n.fqdn IS UNIQUE`,
-		`CREATE CONSTRAINT ip_address IF NOT EXISTS FOR (n:IP) REQUIRE n.address IS UNIQUE`,
+		// Drop legacy IP node constraint from pre-Phase2 data model.
+		`DROP CONSTRAINT ip_address IF EXISTS`,
 		`CREATE CONSTRAINT service_fqdn_port IF NOT EXISTS FOR (n:Service) REQUIRE n.fqdn_port IS UNIQUE`,
 		`CREATE CONSTRAINT cert_sha IF NOT EXISTS FOR (n:Certificate) REQUIRE n.sha256 IS UNIQUE`,
 		`CREATE CONSTRAINT url_unique IF NOT EXISTS FOR (n:URL) REQUIRE n.url IS UNIQUE`,

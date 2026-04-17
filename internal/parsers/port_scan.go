@@ -192,7 +192,6 @@ type naabuRecord struct {
 func (p *portScanParser) Parse(ctx context.Context, trigger graph.Node, stdout io.Reader, stderr io.Reader) (Result, error) {
 	var result Result
 	seen := make(map[string]bool)
-	seenIPs := make(map[string]bool)
 
 	// The trigger is a Subdomain node — use its FQDN as the canonical hostname
 	// for any Service nodes we create. naabu's "host" field should match but
@@ -254,18 +253,6 @@ func (p *portScanParser) Parse(ctx context.Context, trigger graph.Node, stdout i
 		}
 		seen[fqdnPort] = true
 
-		// Upsert IP node if we have one and haven't seen it yet.
-		if ip != "" && !seenIPs[ip] {
-			seenIPs[ip] = true
-			result.Nodes = append(result.Nodes, graph.Node{
-				Type:       graph.NodeIP,
-				PrimaryKey: ip,
-				Props: map[string]any{
-					"address": ip,
-				},
-			})
-		}
-
 		// Infer product and TLS from well-known port numbers.
 		props := map[string]any{
 			"fqdn_port": fqdnPort,
@@ -296,17 +283,6 @@ func (p *portScanParser) Parse(ctx context.Context, trigger graph.Node, stdout i
 				Type:     graph.RelHAS_SERVICE,
 				FromType: graph.NodeSubdomain,
 				FromKey:  triggerFQDN,
-				ToType:   graph.NodeService,
-				ToKey:    fqdnPort,
-			})
-		}
-
-		// IP → HAS_SERVICE → Service (informational, for reverse lookups).
-		if ip != "" {
-			result.Edges = append(result.Edges, graph.Edge{
-				Type:     graph.RelHAS_SERVICE,
-				FromType: graph.NodeIP,
-				FromKey:  ip,
 				ToType:   graph.NodeService,
 				ToKey:    fqdnPort,
 			})

@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net"
 	"strings"
@@ -17,6 +16,9 @@ import (
 //
 // Primary expected format: dnsx JSON (-json flag), one object per line.
 // Fallback: plain text lines "hostname A ip" (massdns simple output).
+//
+// IPs are stored as a comma-separated "ips" property on Subdomain nodes
+// rather than as separate IP nodes.
 type dnsResolverParser struct{}
 
 func init() {
@@ -38,7 +40,7 @@ type dnsxRecord struct {
 func (p *dnsResolverParser) Parse(ctx context.Context, trigger graph.Node, stdout io.Reader, stderr io.Reader) (Result, error) {
 	var result Result
 	seenSubs := make(map[string]bool)
-	seenIPs := make(map[string]bool)
+	subIPs := make(map[string][]string) // fqdn -> collected IPs
 
 	scanner := bufio.NewScanner(stdout)
 	for scanner.Scan() {
@@ -53,21 +55,46 @@ func (p *dnsResolverParser) Parse(ctx context.Context, trigger graph.Node, stdou
 			if err := json.Unmarshal([]byte(line), &rec); err != nil {
 				continue // skip malformed lines
 			}
-			p.processDNSXRecord(&result, rec, trigger, seenSubs, seenIPs)
+			p.processDNSXRecord(&result, rec, trigger, seenSubs, subIPs)
 			continue
 		}
 
 		// Fallback: plain text "hostname A ip" or just "hostname ip".
-		p.processPlainLine(&result, line, trigger, seenSubs, seenIPs)
+		p.processPlainLine(&result, line, trigger, seenSubs, subIPs)
+	}
+
+	// Now set ips property on all subdomain nodes that have IPs collected.
+	for i := range result.Nodes {
+		if result.Nodes[i].Type != graph.NodeSubdomain {
+			continue
+		}
+		fqdn, _ := result.Nodes[i].Props["fqdn"].(string)
+		if ips := subIPs[fqdn]; len(ips) > 0 {
+			result.Nodes[i].Props["ips"] = strings.Join(ips, ",")
+		}
 	}
 
 	return result, scanner.Err()
 }
 
-func (p *dnsResolverParser) processDNSXRecord(result *Result, rec dnsxRecord, trigger graph.Node, seenSubs, seenIPs map[string]bool) {
+func (p *dnsResolverParser) processDNSXRecord(result *Result, rec dnsxRecord, trigger graph.Node, seenSubs map[string]bool, subIPs map[string][]string) {
 	fqdn := strings.ToLower(strings.TrimSuffix(rec.Host, "."))
 	if fqdn == "" {
 		return
+	}
+
+	// Collect IPs as metadata.
+	for _, addr := range rec.A {
+		addr = strings.TrimSpace(addr)
+		if addr != "" {
+			subIPs[fqdn] = append(subIPs[fqdn], addr)
+		}
+	}
+	for _, addr := range rec.AAAA {
+		addr = strings.TrimSpace(addr)
+		if addr != "" {
+			subIPs[fqdn] = append(subIPs[fqdn], addr)
+		}
 	}
 
 	// Upsert subdomain with resolved status.
@@ -86,16 +113,6 @@ func (p *dnsResolverParser) processDNSXRecord(result *Result, rec dnsxRecord, tr
 				"dns_status": rec.StatusCode,
 			},
 		})
-	}
-
-	// A records -> IP nodes + RESOLVES_TO edges.
-	for _, addr := range rec.A {
-		p.addIPEdge(result, fqdn, addr, "A", seenIPs)
-	}
-
-	// AAAA records.
-	for _, addr := range rec.AAAA {
-		p.addIPEdge(result, fqdn, addr, "AAAA", seenIPs)
 	}
 
 	// CNAME records -> Subdomain nodes + CNAME edges.
@@ -125,34 +142,7 @@ func (p *dnsResolverParser) processDNSXRecord(result *Result, rec dnsxRecord, tr
 	}
 }
 
-func (p *dnsResolverParser) addIPEdge(result *Result, fqdn, addr, recordType string, seenIPs map[string]bool) {
-	addr = strings.TrimSpace(addr)
-	if addr == "" {
-		return
-	}
-	if !seenIPs[addr] {
-		seenIPs[addr] = true
-		result.Nodes = append(result.Nodes, graph.Node{
-			Type:       graph.NodeIP,
-			PrimaryKey: addr,
-			Props: map[string]any{
-				"address": addr,
-			},
-		})
-	}
-	result.Edges = append(result.Edges, graph.Edge{
-		Type:     graph.RelRESOLVES_TO,
-		FromType: graph.NodeSubdomain,
-		FromKey:  fqdn,
-		ToType:   graph.NodeIP,
-		ToKey:    addr,
-		Props: map[string]any{
-			"record_type": recordType,
-		},
-	})
-}
-
-func (p *dnsResolverParser) processPlainLine(result *Result, line string, trigger graph.Node, seenSubs, seenIPs map[string]bool) {
+func (p *dnsResolverParser) processPlainLine(result *Result, line string, trigger graph.Node, seenSubs map[string]bool, subIPs map[string][]string) {
 	// Formats: "hostname A ip", "hostname AAAA ip", "hostname ip"
 	fields := strings.Fields(line)
 	if len(fields) < 2 {
@@ -216,7 +206,10 @@ func (p *dnsResolverParser) processPlainLine(result *Result, line string, trigge
 			ToKey:    target,
 		})
 	} else {
-		_ = fmt.Sprintf("") // avoid unused import
-		p.addIPEdge(result, fqdn, addr, recType, seenIPs)
+		// Store IP as metadata on subdomain.
+		addr = strings.TrimSpace(addr)
+		if addr != "" {
+			subIPs[fqdn] = append(subIPs[fqdn], addr)
+		}
 	}
 }

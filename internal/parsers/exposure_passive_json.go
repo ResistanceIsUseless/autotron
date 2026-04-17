@@ -57,7 +57,14 @@ func (p *exposurePassiveJSONParser) Parse(ctx context.Context, trigger graph.Nod
 			ip = trigger.PrimaryKey
 		}
 
-		svcKey := fmt.Sprintf("%s:%d", ip, rec.Port)
+		// The trigger is now a Subdomain node. Use its FQDN for the service key.
+		triggerFQDN, _ := trigger.Props["fqdn"].(string)
+		fqdn := triggerFQDN
+		if fqdn == "" {
+			fqdn = ip // fallback
+		}
+
+		svcKey := fmt.Sprintf("%s:%d", fqdn, rec.Port)
 		if !seenService[svcKey] {
 			seenService[svcKey] = true
 			out.Nodes = append(out.Nodes, graph.Node{
@@ -65,7 +72,7 @@ func (p *exposurePassiveJSONParser) Parse(ctx context.Context, trigger graph.Nod
 				PrimaryKey: svcKey,
 				Props: map[string]any{
 					"fqdn_port":    svcKey,
-					"fqdn":         ip, // IP-triggered: no DNS name available
+					"fqdn":         fqdn,
 					"ip":           ip,
 					"port":         rec.Port,
 					"protocol":     fallbackString(rec.Protocol, "tcp"),
@@ -79,8 +86,8 @@ func (p *exposurePassiveJSONParser) Parse(ctx context.Context, trigger graph.Nod
 
 			out.Edges = append(out.Edges, graph.Edge{
 				Type:     graph.RelHAS_SERVICE,
-				FromType: graph.NodeIP,
-				FromKey:  ip,
+				FromType: graph.NodeSubdomain,
+				FromKey:  fqdn,
 				ToType:   graph.NodeService,
 				ToKey:    svcKey,
 			})

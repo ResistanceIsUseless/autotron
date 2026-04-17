@@ -461,7 +461,7 @@ WITH f, count(DISTINCT p) AS asset_count
 OPTIONAL MATCH (p2)-[:HAS_FINDING]->(f)
 WITH f, asset_count, collect(DISTINCT p2) AS parents
 UNWIND parents AS p2
-OPTIONAL MATCH (d:Subdomain)-[:RESOLVES_TO]->(:IP)-[:HAS_SERVICE]->(p2)
+OPTIONAL MATCH (d:Subdomain)-[:HAS_SERVICE]->(p2)
 WITH f, asset_count, p2, collect(DISTINCT d.fqdn) AS service_dns
 WITH f, asset_count, collect(DISTINCT
   CASE

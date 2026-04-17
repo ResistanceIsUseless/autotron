@@ -54,7 +54,6 @@ func TestGraphIntegration_QueryPendingWithEdgeContext(t *testing.T) {
 	client := mustIntegrationClient(t, ctx)
 
 	sub := fmt.Sprintf("it-edge-%d.example.com", time.Now().UnixNano())
-	ip := fmt.Sprintf("203.0.%d.%d", time.Now().UnixNano()%256, time.Now().UnixNano()/256%256)
 	serviceKey := sub + ":443"
 
 	if _, err := client.UpsertNode(ctx, Node{
@@ -62,13 +61,11 @@ func TestGraphIntegration_QueryPendingWithEdgeContext(t *testing.T) {
 		PrimaryKey: sub,
 		Props: map[string]any{
 			"fqdn":     sub,
+			"ips":      "203.0.113.1",
 			"in_scope": true,
 		},
 	}); err != nil {
 		t.Fatalf("upsert subdomain: %v", err)
-	}
-	if _, err := client.UpsertNode(ctx, Node{Type: NodeIP, PrimaryKey: ip, Props: map[string]any{"address": ip}}); err != nil {
-		t.Fatalf("upsert ip: %v", err)
 	}
 	if _, err := client.UpsertNode(ctx, Node{
 		Type:       NodeService,
@@ -76,7 +73,7 @@ func TestGraphIntegration_QueryPendingWithEdgeContext(t *testing.T) {
 		Props: map[string]any{
 			"fqdn_port": serviceKey,
 			"fqdn":      sub,
-			"ip":        ip,
+			"ip":        "203.0.113.1",
 			"port":      443,
 			"product":   "https",
 			"in_scope":  true,
@@ -85,10 +82,7 @@ func TestGraphIntegration_QueryPendingWithEdgeContext(t *testing.T) {
 		t.Fatalf("upsert service: %v", err)
 	}
 
-	if err := client.UpsertEdge(ctx, Edge{Type: RelRESOLVES_TO, FromType: NodeSubdomain, FromKey: sub, ToType: NodeIP, ToKey: ip}); err != nil {
-		t.Fatalf("upsert resolves_to edge: %v", err)
-	}
-	if err := client.UpsertEdge(ctx, Edge{Type: RelHAS_SERVICE, FromType: NodeIP, FromKey: ip, ToType: NodeService, ToKey: serviceKey}); err != nil {
+	if err := client.UpsertEdge(ctx, Edge{Type: RelHAS_SERVICE, FromType: NodeSubdomain, FromKey: sub, ToType: NodeService, ToKey: serviceKey}); err != nil {
 		t.Fatalf("upsert has_service edge: %v", err)
 	}
 
@@ -97,8 +91,8 @@ func TestGraphIntegration_QueryPendingWithEdgeContext(t *testing.T) {
 		NodeSubdomain,
 		"it_httpx",
 		fmt.Sprintf("n.fqdn = '%s' AND svc.product = 'https'", sub),
-		"-[:RESOLVES_TO]->(i:IP)-[:HAS_SERVICE]->(svc:Service)",
-		[]string{"i.address AS resolved_ip", "svc.port AS port"},
+		"-[:HAS_SERVICE]->(svc:Service)",
+		[]string{"coalesce(svc.ip, '') AS resolved_ip", "svc.port AS port"},
 	)
 	if err != nil {
 		t.Fatalf("query pending with edge context: %v", err)
@@ -107,7 +101,7 @@ func TestGraphIntegration_QueryPendingWithEdgeContext(t *testing.T) {
 		t.Fatalf("expected 1 pending edge-context node, got %d", len(pending))
 	}
 
-	if got := fmt.Sprintf("%v", pending[0].EdgeProps["resolved_ip"]); got != ip {
+	if got := fmt.Sprintf("%v", pending[0].EdgeProps["resolved_ip"]); got != "203.0.113.1" {
 		t.Fatalf("unexpected resolved_ip edge prop: %q", got)
 	}
 	if got := fmt.Sprintf("%v", pending[0].EdgeProps["port"]); got != "443" {
@@ -293,19 +287,13 @@ func TestGraphIntegration_BuildAndRenderHostReport(t *testing.T) {
 	serviceKey := host + ":443"
 	reportURL := "https://" + host + "/api/health"
 
-	if _, err := client.UpsertNode(ctx, Node{Type: NodeSubdomain, PrimaryKey: host, Props: map[string]any{"fqdn": host, "in_scope": true}}); err != nil {
+	if _, err := client.UpsertNode(ctx, Node{Type: NodeSubdomain, PrimaryKey: host, Props: map[string]any{"fqdn": host, "ips": ip, "in_scope": true}}); err != nil {
 		t.Fatalf("upsert subdomain: %v", err)
-	}
-	if _, err := client.UpsertNode(ctx, Node{Type: NodeIP, PrimaryKey: ip, Props: map[string]any{"address": ip}}); err != nil {
-		t.Fatalf("upsert ip: %v", err)
-	}
-	if err := client.UpsertEdge(ctx, Edge{Type: RelRESOLVES_TO, FromType: NodeSubdomain, FromKey: host, ToType: NodeIP, ToKey: ip, Props: map[string]any{"record_type": "A"}}); err != nil {
-		t.Fatalf("upsert resolves_to: %v", err)
 	}
 	if _, err := client.UpsertNode(ctx, Node{Type: NodeService, PrimaryKey: serviceKey, Props: map[string]any{"fqdn_port": serviceKey, "fqdn": host, "ip": ip, "port": 443, "protocol": "tcp", "product": "https", "tls": true}}); err != nil {
 		t.Fatalf("upsert service: %v", err)
 	}
-	if err := client.UpsertEdge(ctx, Edge{Type: RelHAS_SERVICE, FromType: NodeIP, FromKey: ip, ToType: NodeService, ToKey: serviceKey}); err != nil {
+	if err := client.UpsertEdge(ctx, Edge{Type: RelHAS_SERVICE, FromType: NodeSubdomain, FromKey: host, ToType: NodeService, ToKey: serviceKey}); err != nil {
 		t.Fatalf("upsert has_service: %v", err)
 	}
 	if _, err := client.UpsertNode(ctx, Node{Type: NodeURL, PrimaryKey: reportURL, Props: map[string]any{"url": reportURL, "status_code": 200, "title": "Health"}}); err != nil {

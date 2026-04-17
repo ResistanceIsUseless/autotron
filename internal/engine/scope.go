@@ -60,15 +60,6 @@ func (sv *ScopeValidator) IsInScopeWithParent(node graph.Node, parentInScope boo
 	switch node.Type {
 	case graph.NodeDomain, graph.NodeSubdomain:
 		return sv.domainInScope(node)
-	case graph.NodeIP:
-		// First check explicit CIDR match.
-		if sv.ipInScope(node) {
-			return true
-		}
-		// If no CIDRs matched, inherit from the in-scope parent that
-		// caused this IP to be discovered (e.g. an in-scope subdomain
-		// resolved via dnsx).
-		return parentInScope
 	case graph.NodeURL, graph.NodeEndpoint, graph.NodeForm, graph.NodeJSFile:
 		return sv.urlBearingNodeInScope(node)
 	default:
@@ -192,18 +183,15 @@ func normalizeDomainLike(s string) string {
 	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(s), "."))
 }
 
-// ipInScope checks if an IP address falls within any scope CIDR.
-func (sv *ScopeValidator) ipInScope(node graph.Node) bool {
-	addr, _ := node.Props["address"].(string)
+// ipInScope checks if an IP address string falls within any scope CIDR.
+func (sv *ScopeValidator) ipInScope(addr string) bool {
 	if addr == "" {
 		return false
 	}
-
 	ip := net.ParseIP(addr)
 	if ip == nil {
 		return false
 	}
-
 	for _, cidr := range sv.cidrs {
 		if cidr.Contains(ip) {
 			return true

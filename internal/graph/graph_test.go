@@ -50,15 +50,15 @@ func TestBuildPendingNodesQuery_IncludesMatchAndReturns(t *testing.T) {
 	query := buildPendingNodesQuery(
 		NodeSubdomain,
 		"n.in_scope = true",
-		"-[:RESOLVES_TO]->(i:IP)-[:HAS_SERVICE]->(svc:Service)",
-		[]string{"svc.port AS port", "i.address AS resolved_ip"},
+		"-[:HAS_SERVICE]->(svc:Service)",
+		[]string{"svc.port AS port", "coalesce(svc.ip, '') AS resolved_ip"},
 	)
 
-	if !strings.Contains(query, "MATCH (n:Subdomain) -[:RESOLVES_TO]->(i:IP)-[:HAS_SERVICE]->(svc:Service)") {
+	if !strings.Contains(query, "MATCH (n:Subdomain) -[:HAS_SERVICE]->(svc:Service)") {
 		t.Fatalf("expected match pattern in query, got: %s", query)
 	}
 
-	if !strings.Contains(query, "RETURN n, i.address AS resolved_ip, svc.port AS port") {
+	if !strings.Contains(query, "RETURN n, coalesce(svc.ip, '') AS resolved_ip, svc.port AS port") {
 		t.Fatalf("expected additional return projections, got: %s", query)
 	}
 }

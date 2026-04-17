@@ -81,7 +81,7 @@ enrichers:
   - name: ipintel_enrich
     parser: ipintel_json
     subscribes:
-      node_type: IP
+      node_type: Subdomain  # was IP pre-Phase2
       predicate: "n.in_scope = true"
     command:
       bin: ipintel
@@ -104,10 +104,8 @@ enrichers:
     subscribes:
       node_type: Subdomain
       predicate: >
-        n.in_scope = true AND n.status IN ['resolved', 'discovered'] AND EXISTS {
-          MATCH (n)-[:RESOLVES_TO]->(i:IP)
-          WHERE NOT i.address CONTAINS ':'
-        }
+        n.in_scope = true AND n.status IN ['resolved', 'discovered'] AND
+        n.ips IS NOT NULL AND n.ips <> ''
     command:
       bin: naabu
       args:
@@ -252,9 +250,9 @@ enrichers:
     parser: http_probe
     subscribes:
       node_type: Subdomain
-      match: "-[:RESOLVES_TO]->(i:IP)-[:HAS_SERVICE]->(svc:Service)"
+      match: "-[:HAS_SERVICE]->(svc:Service)"
       returns:
-        - "i.address AS resolved_ip"
+        - "coalesce(svc.ip, '') AS resolved_ip"
         - "svc.port AS port"
         - "svc.product AS service_product"
       predicate: >
@@ -464,7 +462,7 @@ enrichers:
     weight: heavy
     subscribes:
       node_type: Subdomain
-      match: "-[:RESOLVES_TO]->(i:IP)-[:HAS_SERVICE]->(svc:Service)"
+      match: "-[:HAS_SERVICE]->(svc:Service)"
       returns:
         - "svc.port AS port"
         - "svc.product AS service_product"
@@ -487,7 +485,7 @@ enrichers:
     weight: heavy
     subscribes:
       node_type: Subdomain
-      match: "-[:RESOLVES_TO]->(i:IP)-[:HAS_SERVICE]->(svc:Service)"
+      match: "-[:HAS_SERVICE]->(svc:Service)"
       returns:
         - "svc.port AS port"
         - "svc.product AS service_product"
@@ -703,7 +701,7 @@ enrichers:
   - name: masscan_scan
     parser: port_scan
     subscribes:
-      node_type: IP
+      node_type: Subdomain  # was IP pre-Phase2
       predicate: "n.in_scope = true"
     command:
       bin: masscan
@@ -715,7 +713,7 @@ enrichers:
   - name: rustscan_scan
     parser: port_scan
     subscribes:
-      node_type: IP
+      node_type: Subdomain  # was IP pre-Phase2
       predicate: "n.in_scope = true"
     command:
       bin: rustscan
@@ -1055,7 +1053,7 @@ enrichers:
   - name: shodan_host_passive
     parser: exposure_passive_json
     subscribes:
-      node_type: IP
+      node_type: Subdomain  # was IP pre-Phase2
       predicate: "n.in_scope = true"
     command:
       bin: exposure-intel
@@ -1075,7 +1073,7 @@ enrichers:
   - name: censys_host_passive
     parser: exposure_passive_json
     subscribes:
-      node_type: IP
+      node_type: Subdomain  # was IP pre-Phase2
       predicate: "n.in_scope = true"
     command:
       bin: exposure-intel
@@ -1088,7 +1086,7 @@ enrichers:
   - name: fofa_host_passive
     parser: exposure_passive_json
     subscribes:
-      node_type: IP
+      node_type: Subdomain  # was IP pre-Phase2
       predicate: "n.in_scope = true"
     command:
       bin: exposure-intel

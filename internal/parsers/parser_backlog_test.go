@@ -23,7 +23,7 @@ func TestSearchDorkJSONParser_Basic(t *testing.T) {
 
 func TestExposurePassiveJSONParser_Basic(t *testing.T) {
 	p := &exposurePassiveJSONParser{}
-	trigger := graph.Node{Type: graph.NodeIP, PrimaryKey: "1.2.3.4", Props: map[string]any{"address": "1.2.3.4"}}
+	trigger := graph.Node{Type: graph.NodeSubdomain, PrimaryKey: "test.example.com", Props: map[string]any{"fqdn": "test.example.com", "ips": "1.2.3.4"}}
 	out, err := p.Parse(context.Background(), trigger, strings.NewReader(`{"provider":"shodan","ip":"1.2.3.4","port":443,"protocol":"tcp","service":"https","product":"nginx","risk":"high"}`), strings.NewReader(""))
 	if err != nil {
 		t.Fatalf("parse failed: %v", err)

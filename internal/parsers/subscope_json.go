@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"strings"
 	"time"
 
@@ -62,7 +61,6 @@ func (p *subscopeJSONParser) Parse(ctx context.Context, trigger graph.Node, stdo
 
 	var result Result
 	seenSubs := make(map[string]bool)
-	seenIPs := make(map[string]bool)
 	now := time.Now().UTC()
 
 	// Process both resolved and discovered domains.
@@ -123,38 +121,6 @@ func (p *subscopeJSONParser) Parse(ctx context.Context, trigger graph.Node, stdo
 			ToType:   graph.NodeSubdomain,
 			ToKey:    fqdn,
 		})
-
-		// Create IP nodes and RESOLVES_TO edges for public IPs.
-		for _, ipStr := range ips {
-			ipStr = strings.TrimSpace(ipStr)
-			if ipStr == "" {
-				continue
-			}
-			ip := net.ParseIP(ipStr)
-			if ip == nil || ip.IsPrivate() || ip.IsLoopback() {
-				continue
-			}
-			if !seenIPs[ipStr] {
-				seenIPs[ipStr] = true
-				result.Nodes = append(result.Nodes, graph.Node{
-					Type:       graph.NodeIP,
-					PrimaryKey: ipStr,
-					Props: map[string]any{
-						"address": ipStr,
-					},
-				})
-			}
-			result.Edges = append(result.Edges, graph.Edge{
-				Type:     graph.RelRESOLVES_TO,
-				FromType: graph.NodeSubdomain,
-				FromKey:  fqdn,
-				ToType:   graph.NodeIP,
-				ToKey:    ipStr,
-				Props: map[string]any{
-					"record_type": "A",
-				},
-			})
-		}
 
 		// CNAME edge.
 		if cname, ok := d.DNSRecords["CNAME"]; ok && cname != "" {

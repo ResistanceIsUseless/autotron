@@ -105,6 +105,7 @@ func ValidateTemplates(args []string, stdinTmpl string) error {
 			"ip":              "127.0.0.1",
 			"port":            "443",
 			"address":         "127.0.0.1",
+			"ips":             "127.0.0.1",
 			"ip_port":         "127.0.0.1:443",
 			"fqdn_port":       "test.example.com:443",
 			"url":             "https://test.example.com",

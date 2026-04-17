@@ -110,12 +110,11 @@ func (c *Client) BuildHostReportWithOptions(ctx context.Context, host string, op
 func (c *Client) loadDNS(ctx context.Context, session neo4j.SessionWithContext, report *HostReport) error {
 	query := `
 MATCH (h:Subdomain {fqdn: $host})
-OPTIONAL MATCH (h)-[r:RESOLVES_TO]->(ip:IP)
 OPTIONAL MATCH (h)-[:CNAME]->(c:Subdomain)
 RETURN
   h.first_seen AS first_seen,
   h.last_seen AS last_seen,
-  collect(DISTINCT {rtype: coalesce(r.record_type, CASE WHEN ip.address CONTAINS ':' THEN 'AAAA' ELSE 'A' END), addr: ip.address, ptr: coalesce(ip.ptr, '')}) AS resolved,
+  coalesce(h.ips, '') AS ips,
   collect(DISTINCT c.fqdn) AS cnames`
 
 	result, err := session.Run(ctx, query, map[string]any{"host": report.Host})
@@ -139,28 +138,23 @@ RETURN
 
 	dns := make([]HostDNSRecord, 0)
 	primary := ""
-	if v, ok := rec.Get("resolved"); ok {
-		if rows, ok := v.([]any); ok {
-			for _, row := range rows {
-				m, ok := row.(map[string]any)
-				if !ok {
+
+	// Parse IPs from the comma-separated ips property.
+	if v, ok := rec.Get("ips"); ok {
+		ipsStr := strings.TrimSpace(fmt.Sprintf("%v", v))
+		if ipsStr != "" && ipsStr != "<nil>" {
+			for _, addr := range strings.Split(ipsStr, ",") {
+				addr = strings.TrimSpace(addr)
+				if addr == "" {
 					continue
 				}
-				addr := strings.TrimSpace(fmt.Sprintf("%v", m["addr"]))
-				if addr == "" || addr == "<nil>" {
-					continue
-				}
-				rtype := strings.TrimSpace(fmt.Sprintf("%v", m["rtype"]))
-				if rtype == "" || rtype == "<nil>" {
-					rtype = "A"
+				rtype := "A"
+				if strings.Contains(addr, ":") {
+					rtype = "AAAA"
 				}
 				dns = append(dns, HostDNSRecord{Type: rtype, Value: addr})
-				if primary == "" && strings.EqualFold(rtype, "A") {
+				if primary == "" && rtype == "A" {
 					primary = addr
-				}
-				ptr := strings.TrimSpace(fmt.Sprintf("%v", m["ptr"]))
-				if ptr != "" && ptr != "<nil>" {
-					dns = append(dns, HostDNSRecord{Type: "PTR", Value: ptr})
 				}
 			}
 		}
@@ -189,8 +183,13 @@ RETURN
 	}
 
 	othersQ := `
-MATCH (h:Subdomain {fqdn: $host})-[:RESOLVES_TO]->(ip:IP)<-[:RESOLVES_TO]-(other:Subdomain)
-WHERE other.fqdn <> $host
+MATCH (h:Subdomain {fqdn: $host})
+WHERE h.ips IS NOT NULL AND h.ips <> ''
+WITH h, split(h.ips, ',') AS myIPs
+MATCH (other:Subdomain)
+WHERE other.fqdn <> $host AND other.ips IS NOT NULL
+WITH h, myIPs, other, split(other.ips, ',') AS otherIPs
+WHERE any(ip IN myIPs WHERE ip IN otherIPs)
 RETURN collect(DISTINCT other.fqdn) AS others`
 	othersResult, err := session.Run(ctx, othersQ, map[string]any{"host": report.Host})
 	if err != nil {
@@ -211,10 +210,10 @@ RETURN collect(DISTINCT other.fqdn) AS others`
 
 func (c *Client) loadPorts(ctx context.Context, session neo4j.SessionWithContext, report *HostReport) error {
 	query := `
-MATCH (h:Subdomain {fqdn: $host})-[:RESOLVES_TO]->(ip:IP)-[:HAS_SERVICE]->(svc:Service)
+MATCH (h:Subdomain {fqdn: $host})-[:HAS_SERVICE]->(svc:Service)
 OPTIONAL MATCH (svc)-[:PRESENTS]->(cert:Certificate)
 RETURN DISTINCT
-  ip.address AS ip,
+  coalesce(svc.ip, '') AS ip,
   toInteger(coalesce(svc.port, 0)) AS port,
   coalesce(svc.protocol, 'tcp') AS protocol,
   coalesce(svc.product, 'unknown') AS service,
@@ -324,7 +323,7 @@ CALL {
   RETURN f, '' AS url
   UNION
   WITH h
-  MATCH (h)-[:RESOLVES_TO]->(:IP)-[:HAS_SERVICE]->(:Service)-[:HAS_FINDING]->(f:Finding)
+  MATCH (h)-[:HAS_SERVICE]->(:Service)-[:HAS_FINDING]->(f:Finding)
   RETURN f, '' AS url
   UNION
   WITH h
@@ -374,14 +373,13 @@ LIMIT 100`
 func (c *Client) loadMetadata(ctx context.Context, session neo4j.SessionWithContext, report *HostReport) error {
 	query := `
 MATCH (h:Subdomain {fqdn: $host})
-OPTIONAL MATCH (h)-[:RESOLVES_TO]->(ip:IP)
-OPTIONAL MATCH (h)-[:RESOLVES_TO]->(:IP)-[:HAS_SERVICE]->(svc:Service)
+OPTIONAL MATCH (h)-[:HAS_SERVICE]->(svc:Service)
 OPTIONAL MATCH (h)-[:SERVES]->(:URL)-[:RUNS]->(t:Technology)
 RETURN
   h.first_seen AS first_seen,
   h.last_seen AS last_seen,
-  collect(DISTINCT coalesce(ip.asn, ip.asn_number, ip.as_number, '')) AS asns,
-  collect(DISTINCT coalesce(ip.provider, ip.org, ip.hosting, '')) AS hostings,
+  coalesce(h.asn_number, h.asn, '') AS asn,
+  coalesce(h.net_provider, h.hosting, '') AS hosting,
   collect(DISTINCT CASE WHEN coalesce(svc.version, '') = '' THEN coalesce(svc.product, '') ELSE coalesce(svc.product, '') + ' ' + svc.version END) AS service_stack,
   collect(DISTINCT CASE WHEN coalesce(t.version, '') = '' THEN coalesce(t.name, '') ELSE coalesce(t.name, '') + ' ' + t.version END) AS web_stack`
 
@@ -404,18 +402,16 @@ RETURN
 		report.Metadata.LastSeen = fmt.Sprintf("%v", v)
 	}
 
-	for _, asn := range toStringSlice(recordValue(rec, "asns")) {
-		asn = strings.TrimSpace(asn)
-		if asn != "" {
+	if v, ok := rec.Get("asn"); ok {
+		asn := strings.TrimSpace(fmt.Sprintf("%v", v))
+		if asn != "" && asn != "<nil>" {
 			report.Metadata.ASN = asn
-			break
 		}
 	}
-	for _, hosting := range toStringSlice(recordValue(rec, "hostings")) {
-		hosting = strings.TrimSpace(hosting)
-		if hosting != "" {
+	if v, ok := rec.Get("hosting"); ok {
+		hosting := strings.TrimSpace(fmt.Sprintf("%v", v))
+		if hosting != "" && hosting != "<nil>" {
 			report.Metadata.Hosting = hosting
-			break
 		}
 	}
 
