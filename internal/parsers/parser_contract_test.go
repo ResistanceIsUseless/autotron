@@ -331,7 +331,7 @@ func TestSecretScannerParser_TrufflehogAndGitleaks(t *testing.T) {
 	}
 }
 
-func TestSubscopeJSONParser_ProgressPrefixAndNoJSONError(t *testing.T) {
+func TestSubscopeJSONParser_ResolvedAndDiscoveredDomains(t *testing.T) {
 	p := &subscopeJSONParser{}
 	trigger := graph.Node{Type: graph.NodeDomain, PrimaryKey: "example.com", Props: map[string]any{"fqdn": "example.com"}}
 
@@ -341,18 +341,45 @@ func TestSubscopeJSONParser_ProgressPrefixAndNoJSONError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse failed: %v", err)
 	}
+
+	// Should have subdomains: api.example.com, cdn.example.com, staging.example.com, edge.vendor.net (CNAME target)
 	if !hasNode(result.Nodes, graph.NodeSubdomain, "api.example.com") {
-		t.Fatal("expected discovered subdomain")
+		t.Fatal("expected resolved subdomain api.example.com")
 	}
-	if !hasNode(result.Nodes, graph.NodeIP, "1.2.3.4") {
-		t.Fatal("expected resolved IP")
+	if !hasNode(result.Nodes, graph.NodeSubdomain, "cdn.example.com") {
+		t.Fatal("expected resolved subdomain cdn.example.com")
 	}
-	if len(result.Findings) != 1 {
-		t.Fatalf("expected cloud-tag finding, got %d", len(result.Findings))
+	if !hasNode(result.Nodes, graph.NodeSubdomain, "staging.example.com") {
+		t.Fatal("expected discovered subdomain staging.example.com")
+	}
+	if !hasNode(result.Nodes, graph.NodeSubdomain, "edge.vendor.net") {
+		t.Fatal("expected CNAME target subdomain edge.vendor.net")
 	}
 
-	if _, err := p.Parse(context.Background(), trigger, strings.NewReader("progress only"), strings.NewReader("")); err == nil {
-		t.Fatal("expected error when no JSON object is present")
+	// Should have IP nodes for public IPs
+	if !hasNode(result.Nodes, graph.NodeIP, "1.2.3.4") {
+		t.Fatal("expected resolved IP 1.2.3.4")
+	}
+	if !hasNode(result.Nodes, graph.NodeIP, "5.6.7.8") {
+		t.Fatal("expected resolved IP 5.6.7.8")
+	}
+
+	// Cloud findings: api has AWS-General, cdn has AWS-CloudFront
+	if len(result.Findings) != 2 {
+		t.Fatalf("expected 2 cloud-tag findings, got %d", len(result.Findings))
+	}
+
+	// CNAME edge from cdn.example.com to edge.vendor.net
+	if !hasEdgeType(result.Edges, graph.RelCNAME) {
+		t.Fatal("expected CNAME edge")
+	}
+
+	// Error on empty/invalid input
+	if _, err := p.Parse(context.Background(), trigger, strings.NewReader(""), strings.NewReader("")); err == nil {
+		t.Fatal("expected error on empty input")
+	}
+	if _, err := p.Parse(context.Background(), trigger, strings.NewReader("not json"), strings.NewReader("")); err == nil {
+		t.Fatal("expected error on invalid JSON")
 	}
 }
 

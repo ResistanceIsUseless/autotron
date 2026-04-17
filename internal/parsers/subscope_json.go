@@ -1,11 +1,11 @@
 package parsers
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"strings"
 	"time"
 
@@ -14,7 +14,7 @@ import (
 
 // subscopeJSONParser handles the custom subscope tool's JSON output.
 // subscope performs DNS enumeration on a Domain and outputs rich structured
-// data including subdomains, IP addresses, and cloud provider tags.
+// data including resolved/discovered domains with DNS records and cloud metadata.
 type subscopeJSONParser struct{}
 
 func init() {
@@ -23,46 +23,37 @@ func init() {
 
 func (p *subscopeJSONParser) Name() string { return "subscope_json" }
 
-// subscopeOutput represents the expected JSON output from subscope.
+// subscopeOutput represents the actual JSON output from subscope.
 type subscopeOutput struct {
-	Domain     string          `json:"domain"`
-	Subdomains []subscopeSub   `json:"subdomains"`
-	IPs        []subscopeIP    `json:"ips"`
-	CloudTags  []subscopeCloud `json:"cloud_tags"`
-	Timestamp  string          `json:"timestamp"`
+	Metadata          subscopeMetadata `json:"metadata"`
+	Statistics        json.RawMessage  `json:"statistics"`
+	ResolvedDomains   []subscopeDomain `json:"resolved_domains"`
+	DiscoveredDomains []subscopeDomain `json:"discovered_domains"`
 }
 
-type subscopeSub struct {
-	FQDN       string   `json:"fqdn"`
-	RecordType string   `json:"record_type"`
-	Values     []string `json:"values"`
-	Source     string   `json:"source"`
+type subscopeMetadata struct {
+	Version   string `json:"version"`
+	Timestamp string `json:"timestamp"`
+	Target    string `json:"target"`
 }
 
-type subscopeIP struct {
-	Address string `json:"address"`
-	PTR     string `json:"ptr"`
-}
-
-type subscopeCloud struct {
-	Provider string `json:"provider"` // aws, gcp, azure, cloudflare, etc.
-	Service  string `json:"service"`  // s3, cloudfront, etc.
-	Target   string `json:"target"`   // the domain/IP this tag applies to
+type subscopeDomain struct {
+	Domain     string            `json:"domain"`
+	Status     string            `json:"status"`      // "resolved" or "failed"
+	DNSRecords map[string]string `json:"dns_records"` // A, A_ALL, CNAME, CLOUD_SERVICE, etc.
+	Source     string            `json:"source"`
+	Timestamp  string            `json:"timestamp"`
 }
 
 func (p *subscopeJSONParser) Parse(ctx context.Context, trigger graph.Node, stdout io.Reader, stderr io.Reader) (Result, error) {
-	// subscope writes progress text to stdout before the JSON object.
-	// Read all output, find the first '{', and decode from there.
 	raw, err := io.ReadAll(stdout)
 	if err != nil {
 		return Result{}, fmt.Errorf("read subscope output: %w", err)
 	}
 
-	idx := bytes.IndexByte(raw, '{')
-	if idx < 0 {
-		return Result{}, fmt.Errorf("subscope output contains no JSON object (got %d bytes of text)", len(raw))
+	if len(raw) == 0 {
+		return Result{}, fmt.Errorf("subscope produced no output")
 	}
-	raw = raw[idx:]
 
 	var output subscopeOutput
 	if err := json.Unmarshal(raw, &output); err != nil {
@@ -72,23 +63,56 @@ func (p *subscopeJSONParser) Parse(ctx context.Context, trigger graph.Node, stdo
 	var result Result
 	seenSubs := make(map[string]bool)
 	seenIPs := make(map[string]bool)
+	now := time.Now().UTC()
 
-	// Process subdomains.
-	for _, sub := range output.Subdomains {
-		fqdn := strings.ToLower(strings.TrimSuffix(sub.FQDN, "."))
+	// Process both resolved and discovered domains.
+	allDomains := append(output.ResolvedDomains, output.DiscoveredDomains...)
+
+	for _, d := range allDomains {
+		fqdn := strings.ToLower(strings.TrimSuffix(d.Domain, "."))
 		if fqdn == "" || seenSubs[fqdn] {
 			continue
 		}
 		seenSubs[fqdn] = true
 
+		status := "discovered"
+		if d.Status == "resolved" {
+			status = "resolved"
+		}
+
+		subProps := map[string]any{
+			"fqdn":   fqdn,
+			"status": status,
+			"source": d.Source,
+		}
+
+		// Extract IPs from dns_records and store as metadata on Subdomain.
+		var ips []string
+		if aAll, ok := d.DNSRecords["A_ALL"]; ok && aAll != "" {
+			ips = strings.Split(aAll, ",")
+		} else if a, ok := d.DNSRecords["A"]; ok && a != "" {
+			ips = []string{a}
+		}
+
+		if len(ips) > 0 {
+			subProps["ips"] = strings.Join(ips, ",")
+		}
+
+		if cname, ok := d.DNSRecords["CNAME"]; ok && cname != "" {
+			subProps["cname"] = strings.ToLower(strings.TrimSuffix(cname, "."))
+		}
+
+		if cloudSvc, ok := d.DNSRecords["CLOUD_SERVICE"]; ok && cloudSvc != "" {
+			subProps["cloud_service"] = cloudSvc
+		}
+		if cloudDNS, ok := d.DNSRecords["CLOUD_DNS"]; ok && cloudDNS != "" {
+			subProps["cloud_dns"] = cloudDNS
+		}
+
 		result.Nodes = append(result.Nodes, graph.Node{
 			Type:       graph.NodeSubdomain,
 			PrimaryKey: fqdn,
-			Props: map[string]any{
-				"fqdn":   fqdn,
-				"status": "discovered",
-				"source": sub.Source,
-			},
+			Props:      subProps,
 		})
 
 		// HAS edge from triggering domain.
@@ -100,99 +124,78 @@ func (p *subscopeJSONParser) Parse(ctx context.Context, trigger graph.Node, stdo
 			ToKey:    fqdn,
 		})
 
-		// If we have resolution values, create RESOLVES_TO edges.
-		for _, val := range sub.Values {
-			val = strings.TrimSpace(val)
-			if val == "" {
+		// Create IP nodes and RESOLVES_TO edges for public IPs.
+		for _, ipStr := range ips {
+			ipStr = strings.TrimSpace(ipStr)
+			if ipStr == "" {
 				continue
 			}
-
-			if sub.RecordType == "A" || sub.RecordType == "AAAA" {
-				if !seenIPs[val] {
-					seenIPs[val] = true
-					result.Nodes = append(result.Nodes, graph.Node{
-						Type:       graph.NodeIP,
-						PrimaryKey: val,
-						Props: map[string]any{
-							"address": val,
-						},
-					})
-				}
-				result.Edges = append(result.Edges, graph.Edge{
-					Type:     graph.RelRESOLVES_TO,
-					FromType: graph.NodeSubdomain,
-					FromKey:  fqdn,
-					ToType:   graph.NodeIP,
-					ToKey:    val,
+			ip := net.ParseIP(ipStr)
+			if ip == nil || ip.IsPrivate() || ip.IsLoopback() {
+				continue
+			}
+			if !seenIPs[ipStr] {
+				seenIPs[ipStr] = true
+				result.Nodes = append(result.Nodes, graph.Node{
+					Type:       graph.NodeIP,
+					PrimaryKey: ipStr,
 					Props: map[string]any{
-						"record_type": sub.RecordType,
+						"address": ipStr,
 					},
 				})
-			} else if sub.RecordType == "CNAME" {
-				target := strings.ToLower(strings.TrimSuffix(val, "."))
-				if !seenSubs[target] {
-					seenSubs[target] = true
-					result.Nodes = append(result.Nodes, graph.Node{
-						Type:       graph.NodeSubdomain,
-						PrimaryKey: target,
-						Props: map[string]any{
-							"fqdn":   target,
-							"status": "discovered",
-						},
-					})
-				}
-				result.Edges = append(result.Edges, graph.Edge{
-					Type:     graph.RelCNAME,
-					FromType: graph.NodeSubdomain,
-					FromKey:  fqdn,
-					ToType:   graph.NodeSubdomain,
-					ToKey:    target,
+			}
+			result.Edges = append(result.Edges, graph.Edge{
+				Type:     graph.RelRESOLVES_TO,
+				FromType: graph.NodeSubdomain,
+				FromKey:  fqdn,
+				ToType:   graph.NodeIP,
+				ToKey:    ipStr,
+				Props: map[string]any{
+					"record_type": "A",
+				},
+			})
+		}
+
+		// CNAME edge.
+		if cname, ok := d.DNSRecords["CNAME"]; ok && cname != "" {
+			target := strings.ToLower(strings.TrimSuffix(cname, "."))
+			if !seenSubs[target] {
+				seenSubs[target] = true
+				result.Nodes = append(result.Nodes, graph.Node{
+					Type:       graph.NodeSubdomain,
+					PrimaryKey: target,
+					Props: map[string]any{
+						"fqdn":   target,
+						"status": "discovered",
+					},
 				})
 			}
-		}
-	}
-
-	// Process standalone IPs.
-	for _, ip := range output.IPs {
-		if ip.Address == "" || seenIPs[ip.Address] {
-			continue
-		}
-		seenIPs[ip.Address] = true
-
-		props := map[string]any{
-			"address": ip.Address,
-		}
-		if ip.PTR != "" {
-			props["ptr"] = ip.PTR
+			result.Edges = append(result.Edges, graph.Edge{
+				Type:     graph.RelCNAME,
+				FromType: graph.NodeSubdomain,
+				FromKey:  fqdn,
+				ToType:   graph.NodeSubdomain,
+				ToKey:    target,
+			})
 		}
 
-		result.Nodes = append(result.Nodes, graph.Node{
-			Type:       graph.NodeIP,
-			PrimaryKey: ip.Address,
-			Props:      props,
-		})
-	}
-
-	// Process cloud tags as findings on the relevant target.
-	for _, tag := range output.CloudTags {
-		if tag.Target == "" || tag.Provider == "" {
-			continue
+		// Cloud service finding.
+		if cloudSvc, ok := d.DNSRecords["CLOUD_SERVICE"]; ok && cloudSvc != "" {
+			result.Findings = append(result.Findings, graph.Finding{
+				ID:         fmt.Sprintf("cloud-%s-%s", strings.ToLower(cloudSvc), fqdn),
+				Type:       "cloud-provider-detected",
+				Title:      fmt.Sprintf("Cloud: %s on %s", cloudSvc, fqdn),
+				Severity:   "info",
+				Confidence: "confirmed",
+				Tool:       "subscope",
+				Evidence: map[string]any{
+					"provider": cloudSvc,
+					"target":   fqdn,
+				},
+				FirstSeen: now,
+				LastSeen:  now,
+			})
 		}
-		result.Findings = append(result.Findings, graph.Finding{
-			ID:         fmt.Sprintf("cloud-%s-%s-%s", tag.Provider, tag.Service, tag.Target),
-			Type:       "cloud-provider-detected",
-			Title:      fmt.Sprintf("Cloud: %s/%s on %s", tag.Provider, tag.Service, tag.Target),
-			Severity:   "info",
-			Confidence: "confirmed",
-			Tool:       "subscope",
-			Evidence: map[string]any{
-				"provider": tag.Provider,
-				"service":  tag.Service,
-				"target":   tag.Target,
-			},
-			FirstSeen: time.Now().UTC(),
-			LastSeen:  time.Now().UTC(),
-		})
 	}
 
 	return result, nil

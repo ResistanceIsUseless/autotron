@@ -29,6 +29,8 @@ enrichers:
         - "{{.Node.fqdn}}"
         - "-o"
         - "-"
+        - "-f"
+        - "json"
         - "-p"
         - "--ct"
         - "--arin"
