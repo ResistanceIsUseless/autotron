@@ -466,11 +466,11 @@ WITH f, asset_count, p2, collect(DISTINCT d.fqdn) AS service_dns
 WITH f, asset_count, collect(DISTINCT
   CASE
     WHEN p2:Service AND size(service_dns) > 0
-      THEN service_dns[0] + ' (' + coalesce(p2.ip_port, '') + ')'
+      THEN service_dns[0] + ' (' + coalesce(p2.fqdn_port, '') + ')'
     ELSE coalesce(
       p2.url,
       p2.fqdn,
-      p2.ip_port,
+      p2.fqdn_port,
       p2.address,
       p2.sha256,
       p2.id,

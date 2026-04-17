@@ -145,7 +145,7 @@ enrichers:
         - "{{.Node.port}}"
         - "-oX"
         - "-"
-        - "{{.Node.ip}}"
+        - "{{.Node.fqdn}}"
       timeout: 5m
       retries: 1
     concurrency: 6
@@ -168,7 +168,7 @@ enrichers:
         - "{{.Node.port}}"
         - "-oX"
         - "-"
-        - "{{.Node.ip}}"
+        - "{{.Node.fqdn}}"
       timeout: 10m
       retries: 1
     concurrency: 6
@@ -191,7 +191,7 @@ enrichers:
         - "{{.Node.port}}"
         - "-oX"
         - "-"
-        - "{{.Node.ip}}"
+        - "{{.Node.fqdn}}"
       timeout: 4m
       retries: 0
     concurrency: 8
@@ -214,7 +214,7 @@ enrichers:
         - "{{.Node.port}}"
         - "-oX"
         - "-"
-        - "{{.Node.ip}}"
+        - "{{.Node.fqdn}}"
       timeout: 5m
       retries: 1
     concurrency: 6
@@ -231,7 +231,7 @@ enrichers:
       bin: tlsx
       args:
         - "-u"
-        - "{{.Node.ip}}:{{.Node.port}}"
+        - "{{.Node.fqdn}}:{{.Node.port}}"
         - "-json"
         - "-san"
         - "-cn"
@@ -576,7 +576,7 @@ enrichers:
       bin: nuclei
       args:
         - "-u"
-        - "{{.Node.ip}}:{{.Node.port}}"
+        - "{{.Node.fqdn}}:{{.Node.port}}"
         - "-t"
         - "network/"
         - "-jsonl"
@@ -729,7 +729,7 @@ enrichers:
       predicate: "n.tls = true AND n.in_scope = true"
     command:
       bin: testssl.sh
-      args: ["--json", "{{.Node.ip}}:{{.Node.port}}"]
+      args: ["--json", "{{.Node.fqdn}}:{{.Node.port}}"]
       timeout: 15m
     concurrency: 2
     enabled: false
@@ -741,7 +741,7 @@ enrichers:
       predicate: "n.tls = true AND n.in_scope = true"
     command:
       bin: sslyze
-      args: ["--json_out=-", "{{.Node.ip}}:{{.Node.port}}"]
+      args: ["--json_out=-", "{{.Node.fqdn}}:{{.Node.port}}"]
       timeout: 10m
     concurrency: 4
     enabled: false
@@ -873,7 +873,7 @@ enrichers:
       predicate: "n.product = 'smb' AND n.in_scope = true"
     command:
       bin: enum4linux-ng
-      args: ["-A", "-oJ", "-", "{{.Node.ip}}"]
+      args: ["-A", "-oJ", "-", "{{.Node.fqdn}}"]
       timeout: 15m
     concurrency: 2
     enabled: false
@@ -885,7 +885,7 @@ enrichers:
       predicate: "n.product = 'smb' AND n.in_scope = true"
     command:
       bin: netexec
-      args: ["smb", "{{.Node.ip}}", "--shares"]
+      args: ["smb", "{{.Node.fqdn}}", "--shares"]
       timeout: 10m
     concurrency: 2
     enabled: false
@@ -948,7 +948,7 @@ enrichers:
       predicate: "n.tls = true AND n.in_scope = true"
     command:
       bin: openssl
-      args: ["s_client", "-connect", "{{.Node.ip}}:{{.Node.port}}"]
+      args: ["s_client", "-connect", "{{.Node.fqdn}}:{{.Node.port}}"]
       timeout: 30s
     concurrency: 8
     enabled: false

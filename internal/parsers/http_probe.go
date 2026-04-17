@@ -135,24 +135,34 @@ func (p *httpProbeParser) processRecord(result *Result, rec httpxRecord, trigger
 
 	// Propagate HTTP server header to related Service nodes when possible.
 	// This improves service-level context in UI for HTTP/HTTPS services.
-	if rec.WebServer != "" && rec.Port != "" && len(rec.A) > 0 {
+	// Use the trigger's FQDN (subdomain) for the Service key.
+	if rec.WebServer != "" && rec.Port != "" {
+		triggerFQDN, _ := trigger.Props["fqdn"].(string)
+		if triggerFQDN == "" {
+			triggerFQDN = rec.Host
+		}
 		var port int
-		if _, err := fmt.Sscanf(rec.Port, "%d", &port); err == nil && port > 0 {
-			for _, ip := range rec.A {
-				ip = strings.TrimSpace(ip)
-				if ip == "" {
-					continue
+		if triggerFQDN != "" {
+			if _, err := fmt.Sscanf(rec.Port, "%d", &port); err == nil && port > 0 {
+				fqdnPort := fmt.Sprintf("%s:%d", triggerFQDN, port)
+				svcProps := map[string]any{
+					"fqdn_port": fqdnPort,
+					"fqdn":      triggerFQDN,
+					"port":      port,
+					"server":    rec.WebServer,
 				}
-				ipPort := fmt.Sprintf("%s:%d", ip, port)
+				// Store first resolved IP as metadata.
+				for _, ip := range rec.A {
+					ip = strings.TrimSpace(ip)
+					if ip != "" {
+						svcProps["ip"] = ip
+						break
+					}
+				}
 				result.Nodes = append(result.Nodes, graph.Node{
 					Type:       graph.NodeService,
-					PrimaryKey: ipPort,
-					Props: map[string]any{
-						"ip_port": ipPort,
-						"ip":      ip,
-						"port":    port,
-						"server":  rec.WebServer,
-					},
+					PrimaryKey: fqdnPort,
+					Props:      svcProps,
 				})
 			}
 		}

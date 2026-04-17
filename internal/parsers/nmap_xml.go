@@ -110,6 +110,11 @@ func (p *nmapXMLParser) Parse(ctx context.Context, trigger graph.Node, stdout io
 
 	var result Result
 
+	// When triggered by a Service node (fqdn:port), use its FQDN for
+	// service key construction. This keeps nmap results aligned with the
+	// fqdn_port data model.
+	triggerFQDN, _ := trigger.Props["fqdn"].(string)
+
 	for _, host := range run.Hosts {
 		// Get primary IP from address list.
 		var ip string
@@ -128,7 +133,12 @@ func (p *nmapXMLParser) Parse(ctx context.Context, trigger graph.Node, stdout io
 				continue
 			}
 
-			ipPort := fmt.Sprintf("%s:%d", ip, port.PortID)
+			// Build fqdn_port key. Prefer trigger FQDN, fall back to IP.
+			fqdn := triggerFQDN
+			if fqdn == "" {
+				fqdn = ip
+			}
+			fqdnPort := fmt.Sprintf("%s:%d", fqdn, port.PortID)
 
 			// Determine product/service name.
 			product := port.Service.Name
@@ -140,13 +150,14 @@ func (p *nmapXMLParser) Parse(ctx context.Context, trigger graph.Node, stdout io
 
 			// Upsert/update Service node with version info from nmap.
 			props := map[string]any{
-				"ip_port":  ipPort,
-				"ip":       ip,
-				"port":     port.PortID,
-				"protocol": port.Protocol,
-				"product":  product,
-				"status":   "open",
-				"tls":      tls,
+				"fqdn_port": fqdnPort,
+				"fqdn":      fqdn,
+				"ip":        ip,
+				"port":      port.PortID,
+				"protocol":  port.Protocol,
+				"product":   product,
+				"status":    "open",
+				"tls":       tls,
 			}
 			if port.Service.Product != "" {
 				props["product_name"] = port.Service.Product
@@ -175,13 +186,13 @@ func (p *nmapXMLParser) Parse(ctx context.Context, trigger graph.Node, stdout io
 
 			result.Nodes = append(result.Nodes, graph.Node{
 				Type:       graph.NodeService,
-				PrimaryKey: ipPort,
+				PrimaryKey: fqdnPort,
 				Props:      props,
 			})
 
 			// Process NSE script results as findings.
 			for _, script := range port.Scripts {
-				finding := p.scriptToFinding(script, ipPort, ip, port.PortID)
+				finding := p.scriptToFinding(script, fqdnPort, ip, port.PortID)
 				if finding != nil {
 					result.Findings = append(result.Findings, *finding)
 				}

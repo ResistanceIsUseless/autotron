@@ -106,6 +106,7 @@ func ValidateTemplates(args []string, stdinTmpl string) error {
 			"port":            "443",
 			"address":         "127.0.0.1",
 			"ip_port":         "127.0.0.1:443",
+			"fqdn_port":       "test.example.com:443",
 			"url":             "https://test.example.com",
 			"path":            "/artifact.apk",
 			"screenshot_path": "/tmp/output/screenshots/test.png",

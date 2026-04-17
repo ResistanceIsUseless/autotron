@@ -214,22 +214,30 @@ func (p *webVulnGenericParser) parseNikto(data string, trigger graph.Node, resul
 			// Treat Nikto banner-change check as service metadata signal too.
 			if idToken == "999962" {
 				if oldB, newB, ok := parseBannerChange(title); ok {
-					if host.IP != "" && host.Port != "" {
-						var portNum int
-						if _, err := fmt.Sscanf(host.Port, "%d", &portNum); err == nil && portNum > 0 {
-							ipPort := fmt.Sprintf("%s:%d", host.IP, portNum)
-							result.Nodes = append(result.Nodes, graph.Node{
-								Type:       graph.NodeService,
-								PrimaryKey: ipPort,
-								Props: map[string]any{
-									"ip_port":         ipPort,
-									"ip":              host.IP,
-									"port":            portNum,
-									"server":          newB,
-									"banner":          newB,
-									"banner_previous": oldB,
-								},
-							})
+					if host.Port != "" {
+						// Use trigger FQDN for service key.
+						triggerFQDN, _ := trigger.Props["fqdn"].(string)
+						if triggerFQDN == "" && host.IP != "" {
+							triggerFQDN = host.IP
+						}
+						if triggerFQDN != "" {
+							var portNum int
+							if _, err := fmt.Sscanf(host.Port, "%d", &portNum); err == nil && portNum > 0 {
+								fqdnPort := fmt.Sprintf("%s:%d", triggerFQDN, portNum)
+								result.Nodes = append(result.Nodes, graph.Node{
+									Type:       graph.NodeService,
+									PrimaryKey: fqdnPort,
+									Props: map[string]any{
+										"fqdn_port":       fqdnPort,
+										"fqdn":            triggerFQDN,
+										"ip":              host.IP,
+										"port":            portNum,
+										"server":          newB,
+										"banner":          newB,
+										"banner_previous": oldB,
+									},
+								})
+							}
 						}
 					}
 				}

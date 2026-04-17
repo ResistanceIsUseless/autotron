@@ -194,6 +194,11 @@ func (p *portScanParser) Parse(ctx context.Context, trigger graph.Node, stdout i
 	seen := make(map[string]bool)
 	seenIPs := make(map[string]bool)
 
+	// The trigger is a Subdomain node — use its FQDN as the canonical hostname
+	// for any Service nodes we create. naabu's "host" field should match but
+	// we prefer the trigger FQDN as the authoritative source.
+	triggerFQDN, _ := trigger.Props["fqdn"].(string)
+
 	scanner := bufio.NewScanner(stdout)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -202,6 +207,7 @@ func (p *portScanParser) Parse(ctx context.Context, trigger graph.Node, stdout i
 		}
 
 		var ip string
+		var host string
 		var port int
 
 		// Try JSON first (naabu -json output).
@@ -211,9 +217,7 @@ func (p *portScanParser) Parse(ctx context.Context, trigger graph.Node, stdout i
 				continue
 			}
 			ip = rec.IP
-			if ip == "" {
-				ip = rec.Host
-			}
+			host = rec.Host
 			port = rec.Port
 		} else {
 			// Fallback: "ip:port" or "host:port".
@@ -221,27 +225,37 @@ func (p *portScanParser) Parse(ctx context.Context, trigger graph.Node, stdout i
 			if len(parts) != 2 {
 				continue
 			}
-			ip = strings.TrimSpace(parts[0])
+			host = strings.TrimSpace(parts[0])
 			if _, err := fmt.Sscanf(parts[1], "%d", &port); err != nil {
 				continue
 			}
 		}
 
-		if ip == "" || port <= 0 || port > 65535 {
+		if port <= 0 || port > 65535 {
 			continue
 		}
 
-		ipPort := fmt.Sprintf("%s:%d", ip, port)
-		if seen[ipPort] {
+		// Determine the FQDN for the Service key. Prefer trigger FQDN,
+		// fall back to naabu's host field, then IP as last resort.
+		fqdn := triggerFQDN
+		if fqdn == "" {
+			fqdn = host
+		}
+		if fqdn == "" {
+			fqdn = ip
+		}
+		if fqdn == "" {
 			continue
 		}
-		seen[ipPort] = true
 
-		// Upsert IP node if not yet seen in this parse run.
-		// When triggered by a Subdomain, the IP may already exist from DNS
-		// resolution but we upsert to be safe. When triggered by an IP node
-		// (legacy/alternative scanners), this is a harmless no-op.
-		if !seenIPs[ip] {
+		fqdnPort := fmt.Sprintf("%s:%d", fqdn, port)
+		if seen[fqdnPort] {
+			continue
+		}
+		seen[fqdnPort] = true
+
+		// Upsert IP node if we have one and haven't seen it yet.
+		if ip != "" && !seenIPs[ip] {
 			seenIPs[ip] = true
 			result.Nodes = append(result.Nodes, graph.Node{
 				Type:       graph.NodeIP,
@@ -254,10 +268,14 @@ func (p *portScanParser) Parse(ctx context.Context, trigger graph.Node, stdout i
 
 		// Infer product and TLS from well-known port numbers.
 		props := map[string]any{
-			"ip_port": ipPort,
-			"ip":      ip,
-			"port":    port,
-			"status":  "open",
+			"fqdn_port": fqdnPort,
+			"fqdn":      fqdn,
+			"port":      port,
+			"status":    "open",
+		}
+		// Store IP as informational metadata (not part of the key).
+		if ip != "" {
+			props["ip"] = ip
 		}
 		if product, ok := wellKnownProducts[port]; ok {
 			props["product"] = product
@@ -268,18 +286,31 @@ func (p *portScanParser) Parse(ctx context.Context, trigger graph.Node, stdout i
 
 		result.Nodes = append(result.Nodes, graph.Node{
 			Type:       graph.NodeService,
-			PrimaryKey: ipPort,
+			PrimaryKey: fqdnPort,
 			Props:      props,
 		})
 
-		// IP → HAS_SERVICE → Service edge (always, regardless of trigger type).
-		result.Edges = append(result.Edges, graph.Edge{
-			Type:     graph.RelHAS_SERVICE,
-			FromType: graph.NodeIP,
-			FromKey:  ip,
-			ToType:   graph.NodeService,
-			ToKey:    ipPort,
-		})
+		// Subdomain → HAS_SERVICE → Service (primary relationship).
+		if triggerFQDN != "" {
+			result.Edges = append(result.Edges, graph.Edge{
+				Type:     graph.RelHAS_SERVICE,
+				FromType: graph.NodeSubdomain,
+				FromKey:  triggerFQDN,
+				ToType:   graph.NodeService,
+				ToKey:    fqdnPort,
+			})
+		}
+
+		// IP → HAS_SERVICE → Service (informational, for reverse lookups).
+		if ip != "" {
+			result.Edges = append(result.Edges, graph.Edge{
+				Type:     graph.RelHAS_SERVICE,
+				FromType: graph.NodeIP,
+				FromKey:  ip,
+				ToType:   graph.NodeService,
+				ToKey:    fqdnPort,
+			})
+		}
 	}
 
 	return result, scanner.Err()

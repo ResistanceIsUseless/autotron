@@ -244,10 +244,10 @@ func (c *Client) ListServices(ctx context.Context, limit int) ([]ServiceView, er
 
 	query := `
 MATCH (s:Service)
-OPTIONAL MATCH (i:IP)-[:HAS_SERVICE]->(s)
-OPTIONAL MATCH (d:Subdomain)-[:RESOLVES_TO]->(i)
+OPTIONAL MATCH (sub:Subdomain)-[:HAS_SERVICE]->(s)
 WITH s,
-     collect(DISTINCT d.fqdn) AS dns_names,
+     collect(DISTINCT sub.fqdn) AS dns_names,
+     coalesce(s.fqdn, '') AS fqdn,
      coalesce(s.ip, '') AS ip,
      toInteger(coalesce(s.port, 0)) AS port,
      coalesce(s.product, '') AS product,
@@ -256,6 +256,7 @@ WITH s,
      coalesce(s.banner, '') AS banner,
      coalesce(s.last_seen, '') AS last_seen
 RETURN
+  fqdn,
   ip,
   port,
   product,
@@ -263,7 +264,7 @@ RETURN
   server,
   banner,
   last_seen,
-  CASE WHEN size(dns_names) > 0 THEN dns_names[0] ELSE '' END AS dns_name,
+  CASE WHEN size(dns_names) > 0 THEN dns_names[0] ELSE fqdn END AS dns_name,
   size(dns_names) AS dns_count
 ORDER BY last_seen DESC
 LIMIT $limit`
@@ -276,13 +277,13 @@ LIMIT $limit`
 	var out []ServiceView
 	for result.Next(ctx) {
 		rec := result.Record()
-		ip := fmt.Sprintf("%v", recordValue(rec, "ip"))
+		fqdn := fmt.Sprintf("%v", recordValue(rec, "fqdn"))
 		port := toInt64(recordValue(rec, "port"))
 		out = append(out, ServiceView{
-			Service:  fmt.Sprintf("%s:%d", ip, port),
+			Service:  fmt.Sprintf("%s:%d", fqdn, port),
 			DNSName:  fmt.Sprintf("%v", recordValue(rec, "dns_name")),
 			DNSCount: toInt64(recordValue(rec, "dns_count")),
-			IP:       ip,
+			IP:       fmt.Sprintf("%v", recordValue(rec, "ip")),
 			Port:     port,
 			Product:  fmt.Sprintf("%v", recordValue(rec, "product")),
 			TLS:      toBool(recordValue(rec, "tls")),
@@ -404,7 +405,7 @@ RETURN
     WHEN 'Finding' THEN coalesce(n.title, n.type, 'finding')
     WHEN 'Subdomain' THEN coalesce(n.fqdn, '')
     WHEN 'IP' THEN coalesce(n.ip, '')
-    WHEN 'Service' THEN coalesce(n.ip, '') + ':' + toString(coalesce(n.port, 0))
+    WHEN 'Service' THEN coalesce(n.fqdn, '') + ':' + toString(coalesce(n.port, 0))
     WHEN 'URL' THEN coalesce(n.url, '')
     WHEN 'Domain' THEN coalesce(n.fqdn, '')
     ELSE coalesce(n.id, n.fqdn, n.ip, n.url, '')

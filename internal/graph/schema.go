@@ -130,7 +130,7 @@ func PrimaryKeyField(nt NodeType) string {
 	case NodeIP:
 		return "address"
 	case NodeService:
-		return "ip_port"
+		return "fqdn_port"
 	case NodeCertificate:
 		return "sha256"
 	case NodeURL:
@@ -156,10 +156,13 @@ func PrimaryKeyField(nt NodeType) string {
 // schema. These are idempotent (IF NOT EXISTS).
 func Constraints() []string {
 	return []string{
+		// Drop legacy ip_port constraint from pre-fqdn_port data model.
+		`DROP CONSTRAINT service_key IF EXISTS`,
+
 		`CREATE CONSTRAINT domain_fqdn IF NOT EXISTS FOR (n:Domain) REQUIRE n.fqdn IS UNIQUE`,
 		`CREATE CONSTRAINT subdomain_fqdn IF NOT EXISTS FOR (n:Subdomain) REQUIRE n.fqdn IS UNIQUE`,
 		`CREATE CONSTRAINT ip_address IF NOT EXISTS FOR (n:IP) REQUIRE n.address IS UNIQUE`,
-		`CREATE CONSTRAINT service_key IF NOT EXISTS FOR (n:Service) REQUIRE n.ip_port IS UNIQUE`,
+		`CREATE CONSTRAINT service_fqdn_port IF NOT EXISTS FOR (n:Service) REQUIRE n.fqdn_port IS UNIQUE`,
 		`CREATE CONSTRAINT cert_sha IF NOT EXISTS FOR (n:Certificate) REQUIRE n.sha256 IS UNIQUE`,
 		`CREATE CONSTRAINT url_unique IF NOT EXISTS FOR (n:URL) REQUIRE n.url IS UNIQUE`,
 		`CREATE CONSTRAINT tech_id_key IF NOT EXISTS FOR (n:Technology) REQUIRE n.tech_id IS UNIQUE`,

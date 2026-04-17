@@ -78,11 +78,12 @@ func TestPortScanParser_JSONAndFallback(t *testing.T) {
 	if !hasNode(result.Nodes, graph.NodeIP, "1.2.3.4") {
 		t.Fatal("expected IP node")
 	}
-	if !hasNode(result.Nodes, graph.NodeService, "1.2.3.4:443") || !hasNode(result.Nodes, graph.NodeService, "1.2.3.4:80") {
+	if !hasNode(result.Nodes, graph.NodeService, "api.example.com:443") || !hasNode(result.Nodes, graph.NodeService, "api.example.com:80") {
 		t.Fatal("expected service nodes for 443 and 80")
 	}
-	if len(result.Edges) != 2 {
-		t.Fatalf("expected 2 HAS_SERVICE edges, got %d", len(result.Edges))
+	// 2 Subdomain→HAS_SERVICE + 1 IP→HAS_SERVICE (only JSON line has IP) = 3 edges
+	if len(result.Edges) != 3 {
+		t.Fatalf("expected 3 HAS_SERVICE edges, got %d", len(result.Edges))
 	}
 }
 
@@ -140,7 +141,7 @@ func TestURLListParser_MixedFormats(t *testing.T) {
 
 func TestNmapXMLParser_SuccessAndMalformedHostXML(t *testing.T) {
 	p := &nmapXMLParser{}
-	trigger := graph.Node{Type: graph.NodeService, PrimaryKey: "1.2.3.4:443", Props: map[string]any{"ip_port": "1.2.3.4:443"}}
+	trigger := graph.Node{Type: graph.NodeService, PrimaryKey: "test.example.com:443", Props: map[string]any{"fqdn_port": "test.example.com:443", "fqdn": "test.example.com"}}
 
 	xmlOut := fixture(t, "nmap_success.xml")
 	result, err := p.Parse(context.Background(), trigger, strings.NewReader(xmlOut), strings.NewReader(""))
@@ -148,7 +149,7 @@ func TestNmapXMLParser_SuccessAndMalformedHostXML(t *testing.T) {
 		t.Fatalf("parse failed: %v", err)
 	}
 
-	if !hasNode(result.Nodes, graph.NodeService, "1.2.3.4:443") {
+	if !hasNode(result.Nodes, graph.NodeService, "test.example.com:443") {
 		t.Fatal("expected service node from nmap XML")
 	}
 	if !hasNode(result.Nodes, graph.NodeSubdomain, "api.example.com") {
@@ -166,7 +167,7 @@ func TestNmapXMLParser_SuccessAndMalformedHostXML(t *testing.T) {
 
 func TestTLSAuditParser_SuccessAndMalformed(t *testing.T) {
 	p := &tlsAuditParser{}
-	trigger := graph.Node{Type: graph.NodeService, PrimaryKey: "1.2.3.4:443", Props: map[string]any{"ip": "1.2.3.4", "port": 443}}
+	trigger := graph.Node{Type: graph.NodeService, PrimaryKey: "test.example.com:443", Props: map[string]any{"fqdn": "test.example.com", "ip": "1.2.3.4", "port": 443}}
 
 	stdout := fixture(t, "tls_audit_success.jsonl")
 	result, err := p.Parse(context.Background(), trigger, strings.NewReader(stdout), strings.NewReader(""))

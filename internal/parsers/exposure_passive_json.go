@@ -64,7 +64,8 @@ func (p *exposurePassiveJSONParser) Parse(ctx context.Context, trigger graph.Nod
 				Type:       graph.NodeService,
 				PrimaryKey: svcKey,
 				Props: map[string]any{
-					"ip_port":      svcKey,
+					"fqdn_port":    svcKey,
+					"fqdn":         ip, // IP-triggered: no DNS name available
 					"ip":           ip,
 					"port":         rec.Port,
 					"protocol":     fallbackString(rec.Protocol, "tcp"),
