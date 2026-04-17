@@ -666,3 +666,64 @@ func (c *Client) HasInScopeAncestor(ctx context.Context, fqdn string) (bool, err
 	}
 	return false, nil
 }
+
+// AddDomain creates a Domain node for manual enrichment (no scan run required).
+func (c *Client) AddDomain(ctx context.Context, fqdn string) error {
+	_, err := c.UpsertNode(ctx, Node{
+		Type:       NodeDomain,
+		PrimaryKey: fqdn,
+		Props: map[string]any{
+			"fqdn":            fqdn,
+			"in_scope":        true,
+			"discovery_depth": 0,
+			"status":          "manual",
+		},
+	})
+	return err
+}
+
+// RemoveDomain removes a Domain node and all its relationships.
+func (c *Client) RemoveDomain(ctx context.Context, fqdn string) error {
+	return c.RunCypher(ctx, `MATCH (n:Domain {fqdn: $key}) DETACH DELETE n`, map[string]any{"key": fqdn})
+}
+
+// AddURL creates a URL node for manual enrichment.
+func (c *Client) AddURL(ctx context.Context, rawURL string) error {
+	_, err := c.UpsertNode(ctx, Node{
+		Type:       NodeURL,
+		PrimaryKey: rawURL,
+		Props: map[string]any{
+			"url":             rawURL,
+			"in_scope":        true,
+			"discovery_depth": 0,
+			"status":          "manual",
+		},
+	})
+	return err
+}
+
+// RemoveURL removes a URL node and all its relationships.
+func (c *Client) RemoveURL(ctx context.Context, rawURL string) error {
+	return c.RunCypher(ctx, `MATCH (n:URL {url: $key}) DETACH DELETE n`, map[string]any{"key": rawURL})
+}
+
+// AddJSFile creates a JSFile node for manual enrichment.
+func (c *Client) AddJSFile(ctx context.Context, jsfileID string, jsURL string) error {
+	_, err := c.UpsertNode(ctx, Node{
+		Type:       NodeJSFile,
+		PrimaryKey: jsfileID,
+		Props: map[string]any{
+			"jsfile_id":       jsfileID,
+			"url":             jsURL,
+			"in_scope":        true,
+			"discovery_depth": 0,
+			"status":          "manual",
+		},
+	})
+	return err
+}
+
+// RemoveJSFile removes a JSFile node and all its relationships.
+func (c *Client) RemoveJSFile(ctx context.Context, jsfileID string) error {
+	return c.RunCypher(ctx, `MATCH (n:JSFile {jsfile_id: $key}) DETACH DELETE n`, map[string]any{"key": jsfileID})
+}

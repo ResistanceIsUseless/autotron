@@ -115,6 +115,30 @@ const indexHTML = `<!doctype html>
     <!-- Stats row -->
     <div class="grid grid-stats" id="summary"></div>
 
+    <!-- Add Assets -->
+    <div class="card section">
+      <div class="card-header">
+        <span class="card-title">Add Assets for Enrichment</span>
+      </div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-end;">
+        <div>
+          <label class="tiny" style="color:var(--muted)">Domain (FQDN)</label><br/>
+          <input id="addDomainInput" placeholder="sub.example.com" style="width:200px;" />
+          <button class="primary" onclick="addAssetDomain()">Add</button>
+        </div>
+        <div>
+          <label class="tiny" style="color:var(--muted)">URL</label><br/>
+          <input id="addURLInput" placeholder="https://example.com/path" style="width:260px;" />
+          <button class="primary" onclick="addAssetURL()">Add</button>
+        </div>
+        <div>
+          <label class="tiny" style="color:var(--muted)">JS File URL</label><br/>
+          <input id="addJSFileInput" placeholder="https://example.com/app.js" style="width:260px;" />
+          <button class="primary" onclick="addAssetJSFile()">Add</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Main 3-col layout: activity | enricher progress | scan runs -->
     <div class="grid grid-3 section">
       <div class="card">
@@ -169,7 +193,7 @@ const indexHTML = `<!doctype html>
         <span class="card-title">Recent URLs</span>
       </div>
       <table>
-        <thead><tr><th>URL</th><th>Host</th><th>Status</th><th>Title</th><th>Last Seen</th></tr></thead>
+        <thead><tr><th>URL</th><th>Host</th><th>Status</th><th>Title</th><th>Last Seen</th><th></th></tr></thead>
         <tbody id="urlRows"></tbody>
       </table>
     </div>
@@ -366,7 +390,7 @@ const indexHTML = `<!doctype html>
     async function loadURLs() {
       const data = await j('/api/data/urls?limit=25');
       document.getElementById('urlRows').innerHTML = (data.items||[]).map(u =>
-        '<tr><td class="tiny"><a href="' + esc(u.url) + '" target="_blank" rel="noreferrer">' + esc(u.url) + '</a></td><td class="tiny">' + esc(u.host||'') + '</td><td>' + esc(u.status_code||0) + '</td><td class="tiny">' + esc(u.title||'') + '</td><td class="tiny">' + relTime(u.last_seen) + '</td></tr>'
+        '<tr><td class="tiny"><a href="' + esc(u.url) + '" target="_blank" rel="noreferrer">' + esc(u.url) + '</a></td><td class="tiny">' + esc(u.host||'') + '</td><td>' + esc(u.status_code||0) + '</td><td class="tiny">' + esc(u.title||'') + '</td><td class="tiny">' + relTime(u.last_seen) + '</td><td><button onclick="deleteAssetURL(\'' + String(u.url).replace(/'/g,"\\'") + '\')" style="color:var(--red);border-color:var(--red);">x</button></td></tr>'
       ).join('');
     }
 
@@ -489,6 +513,47 @@ const indexHTML = `<!doctype html>
         loadFindings(), loadServices(), loadURLs(),
         loadHealth(), loadJSFiles(), loadMonitorList(), loadChanges()
       ]);
+    }
+
+    // --- Add/Remove Assets ---
+    async function addAssetDomain() {
+      const fqdn = document.getElementById('addDomainInput').value.trim();
+      if (!fqdn) { alert('Enter a domain'); return; }
+      const d = await j('/api/assets/domain', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({fqdn}) });
+      if (d.ok) { document.getElementById('addDomainInput').value=''; await loadSummary(); }
+      else alert('Failed: ' + (d.error||JSON.stringify(d)));
+    }
+    async function addAssetURL() {
+      const url = document.getElementById('addURLInput').value.trim();
+      if (!url) { alert('Enter a URL'); return; }
+      const d = await j('/api/assets/url', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({url}) });
+      if (d.ok) { document.getElementById('addURLInput').value=''; await Promise.all([loadSummary(), loadURLs()]); }
+      else alert('Failed: ' + (d.error||JSON.stringify(d)));
+    }
+    async function addAssetJSFile() {
+      const url = document.getElementById('addJSFileInput').value.trim();
+      if (!url) { alert('Enter a JS URL'); return; }
+      const d = await j('/api/assets/jsfile', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({url}) });
+      if (d.ok) { document.getElementById('addJSFileInput').value=''; await Promise.all([loadSummary(), loadJSFiles()]); }
+      else alert('Failed: ' + (d.error||JSON.stringify(d)));
+    }
+    async function deleteAssetDomain(fqdn) {
+      if (!confirm('Delete domain ' + fqdn + ' and all its relationships?')) return;
+      const d = await j('/api/assets/domain?fqdn=' + encodeURIComponent(fqdn), { method:'DELETE' });
+      if (d.ok) await loadSummary();
+      else alert('Failed: ' + (d.error||JSON.stringify(d)));
+    }
+    async function deleteAssetURL(url) {
+      if (!confirm('Delete URL node?')) return;
+      const d = await j('/api/assets/url?url=' + encodeURIComponent(url), { method:'DELETE' });
+      if (d.ok) await Promise.all([loadSummary(), loadURLs()]);
+      else alert('Failed: ' + (d.error||JSON.stringify(d)));
+    }
+    async function deleteAssetJSFile(id) {
+      if (!confirm('Delete JS file node?')) return;
+      const d = await j('/api/assets/jsfile?id=' + encodeURIComponent(id), { method:'DELETE' });
+      if (d.ok) await Promise.all([loadSummary(), loadJSFiles()]);
+      else alert('Failed: ' + (d.error||JSON.stringify(d)));
     }
 
     refreshAll();

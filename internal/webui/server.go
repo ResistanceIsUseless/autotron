@@ -47,6 +47,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/top-findings", s.handleTopFindings)
 	mux.HandleFunc("/api/enricher-progress", s.handleEnricherProgress)
 	mux.HandleFunc("/api/activity", s.handleActivity)
+	mux.HandleFunc("/api/assets/domain", s.handleAssetDomain)
+	mux.HandleFunc("/api/assets/url", s.handleAssetURL)
+	mux.HandleFunc("/api/assets/jsfile", s.handleAssetJSFile)
 	mux.HandleFunc("/api/jsrecon/monitor", s.handleMonitorAdd)
 	mux.HandleFunc("/api/jsrecon/monitor/check", s.handleMonitorCheck)
 	mux.HandleFunc("/api/jsrecon/monitor/list", s.handleMonitorList)
@@ -59,7 +62,7 @@ func (s *Server) Routes() http.Handler {
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -423,4 +426,125 @@ func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
+}
+
+func (s *Server) handleAssetDomain(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	switch r.Method {
+	case http.MethodPost:
+		var req struct {
+			FQDN string `json:"fqdn"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid json"})
+			return
+		}
+		req.FQDN = strings.TrimSpace(req.FQDN)
+		if req.FQDN == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "fqdn is required"})
+			return
+		}
+		if err := s.graphClient.AddDomain(ctx, req.FQDN); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "fqdn": req.FQDN})
+	case http.MethodDelete:
+		fqdn := strings.TrimSpace(r.URL.Query().Get("fqdn"))
+		if fqdn == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "fqdn query param required"})
+			return
+		}
+		if err := s.graphClient.RemoveDomain(ctx, fqdn); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "deleted": fqdn})
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+	}
+}
+
+func (s *Server) handleAssetURL(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	switch r.Method {
+	case http.MethodPost:
+		var req struct {
+			URL string `json:"url"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid json"})
+			return
+		}
+		req.URL = strings.TrimSpace(req.URL)
+		if req.URL == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "url is required"})
+			return
+		}
+		if _, err := url.ParseRequestURI(req.URL); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid url"})
+			return
+		}
+		if err := s.graphClient.AddURL(ctx, req.URL); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "url": req.URL})
+	case http.MethodDelete:
+		rawURL := strings.TrimSpace(r.URL.Query().Get("url"))
+		if rawURL == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "url query param required"})
+			return
+		}
+		if err := s.graphClient.RemoveURL(ctx, rawURL); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "deleted": rawURL})
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+	}
+}
+
+func (s *Server) handleAssetJSFile(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	switch r.Method {
+	case http.MethodPost:
+		var req struct {
+			URL string `json:"url"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid json"})
+			return
+		}
+		req.URL = strings.TrimSpace(req.URL)
+		if req.URL == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "url is required"})
+			return
+		}
+		if _, err := url.ParseRequestURI(req.URL); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid url"})
+			return
+		}
+		// Use URL as the jsfile_id for manually added files
+		jsfileID := req.URL
+		if err := s.graphClient.AddJSFile(ctx, jsfileID, req.URL); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "url": req.URL})
+	case http.MethodDelete:
+		jsfileID := strings.TrimSpace(r.URL.Query().Get("id"))
+		if jsfileID == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "id query param required"})
+			return
+		}
+		if err := s.graphClient.RemoveJSFile(ctx, jsfileID); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "deleted": jsfileID})
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+	}
 }
