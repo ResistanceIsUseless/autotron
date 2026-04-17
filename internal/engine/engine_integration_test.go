@@ -17,6 +17,7 @@ func TestEngineIntegration_SeedDispatchAndConverge(t *testing.T) {
 	client := mustIntegrationGraphClient(t, ctx)
 
 	domain := fmt.Sprintf("it-engine-%d.example.com", time.Now().UnixNano())
+	t.Cleanup(func() { cleanupTestDomain(t, client, domain) })
 
 	cfg := &config.Config{
 		Scope: config.ScopeConfig{Domains: []string{"example.com"}},
@@ -78,6 +79,7 @@ func TestEngineIntegration_TransientRunErrorKeepsNodePending(t *testing.T) {
 	client := mustIntegrationGraphClient(t, ctx)
 
 	domain := fmt.Sprintf("it-transient-%d.example.com", time.Now().UnixNano())
+	t.Cleanup(func() { cleanupTestDomain(t, client, domain) })
 
 	cfg := &config.Config{
 		Scope: config.ScopeConfig{Domains: []string{"example.com"}},
@@ -134,6 +136,7 @@ func TestEngineIntegration_FatalRunErrorMarksNodeEnriched(t *testing.T) {
 	client := mustIntegrationGraphClient(t, ctx)
 
 	domain := fmt.Sprintf("it-fatal-%d.example.com", time.Now().UnixNano())
+	t.Cleanup(func() { cleanupTestDomain(t, client, domain) })
 
 	cfg := &config.Config{
 		Scope: config.ScopeConfig{Domains: []string{"example.com"}},
@@ -214,3 +217,47 @@ func envOrDefault(key, fallback string) string {
 type ioDiscard struct{}
 
 func (ioDiscard) Write(p []byte) (int, error) { return len(p), nil }
+
+// cleanupTestDomain removes all nodes and relationships created by an
+// integration test. It deletes:
+//   - The Domain node with the given fqdn
+//   - Any Subdomain nodes ending with the domain (e.g. sub1.<domain>)
+//   - Any ScanRun nodes whose target matches the domain
+//   - All relationships attached to the above nodes
+//   - Any Finding nodes linked to the above nodes
+func cleanupTestDomain(t *testing.T, client *graph.Client, domain string) {
+	t.Helper()
+	ctx := context.Background()
+
+	// Delete subdomains and their relationships.
+	if err := client.RunCypher(ctx,
+		"MATCH (n:Subdomain) WHERE n.fqdn ENDS WITH $domain DETACH DELETE n",
+		map[string]any{"domain": domain},
+	); err != nil {
+		t.Logf("cleanup subdomain nodes: %v", err)
+	}
+
+	// Delete findings linked to the domain or its subdomains.
+	if err := client.RunCypher(ctx,
+		"MATCH (n:Domain {fqdn: $domain})-[*]-(f:Finding) DETACH DELETE f",
+		map[string]any{"domain": domain},
+	); err != nil {
+		t.Logf("cleanup findings: %v", err)
+	}
+
+	// Delete the domain node itself.
+	if err := client.RunCypher(ctx,
+		"MATCH (n:Domain {fqdn: $domain}) DETACH DELETE n",
+		map[string]any{"domain": domain},
+	); err != nil {
+		t.Logf("cleanup domain node: %v", err)
+	}
+
+	// Delete ScanRun nodes created by this test.
+	if err := client.RunCypher(ctx,
+		"MATCH (n:ScanRun) WHERE n.target = $domain DETACH DELETE n",
+		map[string]any{"domain": domain},
+	); err != nil {
+		t.Logf("cleanup scan run nodes: %v", err)
+	}
+}

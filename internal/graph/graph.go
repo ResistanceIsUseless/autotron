@@ -44,6 +44,15 @@ func (c *Client) Close(ctx context.Context) error {
 	return c.driver.Close(ctx)
 }
 
+// RunCypher executes an arbitrary Cypher statement. Intended for testing and
+// administrative operations only.
+func (c *Client) RunCypher(ctx context.Context, cypher string, params map[string]any) error {
+	session := c.driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeWrite})
+	defer session.Close(ctx)
+	_, err := session.Run(ctx, cypher, params)
+	return err
+}
+
 // InitSchema creates constraints and indexes. Idempotent — safe to call on
 // every startup.
 func (c *Client) InitSchema(ctx context.Context) error {
