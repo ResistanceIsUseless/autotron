@@ -29,12 +29,18 @@ func (p *webscopeJSONParser) Name() string { return "webscope_json" }
 
 // webscopeV2Output matches the top-level JSON structure from webscope v2.
 type webscopeV2Output struct {
-	Target    string           `json:"target"`
-	Flow      string           `json:"flow"`
-	Paths     []webscopeV2Path `json:"paths"`
-	Endpoints []webscopeV2EP   `json:"endpoints"`
-	Findings  []webscopeV2Find `json:"findings"`
-	Stats     map[string]any   `json:"stats"`
+	Target         string              `json:"target"`
+	Flow           string              `json:"flow"`
+	Paths          []webscopeV2Path    `json:"paths"`
+	Endpoints      []webscopeV2EP      `json:"endpoints"`
+	Findings       []webscopeV2Find    `json:"findings"`
+	Secrets        []webscopeV2Secret  `json:"secrets"`
+	Technologies   []webscopeV2Tech    `json:"technologies"`
+	Forms          []webscopeV2Form    `json:"forms"`
+	Parameters     []webscopeV2Param   `json:"parameters"`
+	GraphQLSchemas []webscopeV2GraphQL `json:"graphql_schemas"`
+	WebSockets     []webscopeV2WS      `json:"websockets"`
+	Stats          map[string]any      `json:"stats"`
 }
 
 type webscopeV2Path struct {
@@ -53,10 +59,64 @@ type webscopeV2EP struct {
 }
 
 type webscopeV2Find struct {
-	URL      string `json:"url"`
-	Type     string `json:"type"`
-	Severity string `json:"severity"`
-	Details  string `json:"details"`
+	URL        string         `json:"url"`
+	Type       string         `json:"type"`
+	Severity   string         `json:"severity"`
+	Details    string         `json:"details"`
+	Category   string         `json:"category"`
+	Title      string         `json:"title"`
+	Evidence   string         `json:"evidence"`
+	Confidence string         `json:"confidence"`
+	References []string       `json:"references"`
+	Metadata   map[string]any `json:"metadata"`
+}
+
+type webscopeV2Secret struct {
+	Type    string `json:"type"`
+	Value   string `json:"value"`
+	Context string `json:"context"`
+	Source  string `json:"source"`
+}
+
+type webscopeV2Tech struct {
+	Name     string `json:"name"`
+	Category string `json:"category"`
+	Version  string `json:"version"`
+	Source   string `json:"source"`
+}
+
+type webscopeV2Form struct {
+	Action string            `json:"action"`
+	Method string            `json:"method"`
+	Inputs []webscopeV2Input `json:"inputs"`
+	Source string            `json:"source"`
+}
+
+type webscopeV2Input struct {
+	Name  string `json:"name"`
+	Type  string `json:"type"`
+	Value string `json:"value"`
+}
+
+type webscopeV2Param struct {
+	Name   string `json:"name"`
+	Type   string `json:"type"`
+	Source string `json:"source"`
+}
+
+type webscopeV2GraphQL struct {
+	Endpoint      string   `json:"endpoint"`
+	Queries       []string `json:"queries"`
+	Mutations     []string `json:"mutations"`
+	Subscriptions []string `json:"subscriptions"`
+	Source        string   `json:"source"`
+}
+
+type webscopeV2WS struct {
+	URL         string `json:"url"`
+	Protocol    string `json:"protocol"`
+	Subprotocol string `json:"subprotocol"`
+	Source      string `json:"source"`
 }
 
 func (p *webscopeJSONParser) Parse(ctx context.Context, trigger graph.Node, stdout io.Reader, stderr io.Reader) (Result, error) {
@@ -116,6 +176,14 @@ func (p *webscopeJSONParser) Parse(ctx context.Context, trigger graph.Node, stdo
 		}
 	}
 
+	// Build a base URL from the trigger/output for constructing keys.
+	baseURL := out.Target
+	if baseURL == "" && trigger.Props != nil {
+		if u, ok := trigger.Props["url"].(string); ok {
+			baseURL = u
+		}
+	}
+
 	// Process endpoints → Endpoint nodes.
 	for _, ep := range out.Endpoints {
 		if ep.Path == "" {
@@ -124,13 +192,6 @@ func (p *webscopeJSONParser) Parse(ctx context.Context, trigger graph.Node, stdo
 		method := ep.Method
 		if method == "" {
 			method = "GET"
-		}
-		// Build a base URL from the trigger to construct the endpoint key.
-		baseURL := out.Target
-		if baseURL == "" && trigger.Props != nil {
-			if u, ok := trigger.Props["url"].(string); ok {
-				baseURL = u
-			}
 		}
 		key := endpointID(baseURL, method, ep.Path)
 		result.Nodes = append(result.Nodes, graph.Node{
@@ -153,7 +214,8 @@ func (p *webscopeJSONParser) Parse(ctx context.Context, trigger graph.Node, stdo
 		})
 	}
 
-	// Process findings.
+	// Process findings (now with richer fields).
+	now := time.Now().UTC()
 	for _, f := range out.Findings {
 		if f.Type == "" {
 			continue
@@ -162,23 +224,208 @@ func (p *webscopeJSONParser) Parse(ctx context.Context, trigger graph.Node, stdo
 		if sev == "" {
 			sev = "info"
 		}
+		title := f.Title
+		if title == "" {
+			title = f.Details
+		}
+		confidence := f.Confidence
+		if confidence == "" {
+			confidence = "tentative"
+		}
 		findID := fmt.Sprintf("webscope-%s-%s", f.Type, trigger.PrimaryKey)
 		if f.URL != "" {
 			findID = fmt.Sprintf("webscope-%s-%s", f.Type, f.URL)
 		}
+		evidence := map[string]any{
+			"url":     f.URL,
+			"details": f.Details,
+		}
+		if f.Evidence != "" {
+			evidence["evidence"] = f.Evidence
+		}
+		if f.Category != "" {
+			evidence["category"] = f.Category
+		}
+		if len(f.References) > 0 {
+			evidence["references"] = f.References
+		}
+		if len(f.Metadata) > 0 {
+			evidence["metadata"] = f.Metadata
+		}
 		result.Findings = append(result.Findings, graph.Finding{
 			ID:         findID,
 			Type:       f.Type,
-			Title:      f.Details,
+			Title:      title,
 			Severity:   sev,
-			Confidence: "tentative",
+			Confidence: confidence,
+			Tool:       "webscope",
+			Evidence:   evidence,
+			FirstSeen:  now,
+			LastSeen:   now,
+		})
+	}
+
+	// Process secrets → Findings with high severity.
+	for _, s := range out.Secrets {
+		if s.Type == "" {
+			continue
+		}
+		findID := fmt.Sprintf("webscope-secret-%s-%s", s.Type, trigger.PrimaryKey)
+		sev := "high"
+		if strings.Contains(strings.ToLower(s.Type), "info") {
+			sev = "medium"
+		}
+		result.Findings = append(result.Findings, graph.Finding{
+			ID:         findID,
+			Type:       "secret-" + s.Type,
+			Title:      fmt.Sprintf("Secret detected: %s", s.Type),
+			Severity:   sev,
+			Confidence: "firm",
 			Tool:       "webscope",
 			Evidence: map[string]any{
-				"url":     f.URL,
-				"details": f.Details,
+				"secret_type": s.Type,
+				"context":     s.Context,
+				"source":      s.Source,
 			},
-			FirstSeen: time.Now().UTC(),
-			LastSeen:  time.Now().UTC(),
+			FirstSeen: now,
+			LastSeen:  now,
+		})
+	}
+
+	// Process technologies → Technology nodes linked to trigger URL.
+	for _, t := range out.Technologies {
+		if t.Name == "" {
+			continue
+		}
+		key := technologyID(t.Name, t.Version)
+		result.Nodes = append(result.Nodes, graph.Node{
+			Type:       graph.NodeTechnology,
+			PrimaryKey: key,
+			Props: map[string]any{
+				"technology_id": key,
+				"name":          t.Name,
+				"category":      t.Category,
+				"version":       t.Version,
+				"source":        t.Source,
+			},
+		})
+		result.Edges = append(result.Edges, graph.Edge{
+			Type:     graph.RelRUNS,
+			FromType: graph.NodeURL,
+			FromKey:  trigger.PrimaryKey,
+			ToType:   graph.NodeTechnology,
+			ToKey:    key,
+		})
+	}
+
+	// Process forms → Form nodes linked to trigger URL.
+	for _, f := range out.Forms {
+		if f.Action == "" {
+			continue
+		}
+		key := formID(baseURL, f.Action)
+		props := map[string]any{
+			"form_id": key,
+			"action":  f.Action,
+			"method":  f.Method,
+			"source":  f.Source,
+		}
+		// Store input names as comma-separated list.
+		var inputNames []string
+		for _, inp := range f.Inputs {
+			inputNames = append(inputNames, inp.Name)
+		}
+		if len(inputNames) > 0 {
+			props["inputs"] = strings.Join(inputNames, ",")
+		}
+		result.Nodes = append(result.Nodes, graph.Node{
+			Type:       graph.NodeForm,
+			PrimaryKey: key,
+			Props:      props,
+		})
+		result.Edges = append(result.Edges, graph.Edge{
+			Type:     graph.RelCONTAINS,
+			FromType: graph.NodeURL,
+			FromKey:  trigger.PrimaryKey,
+			ToType:   graph.NodeForm,
+			ToKey:    key,
+		})
+	}
+
+	// Process GraphQL schemas → Findings (high-value discovery).
+	for _, g := range out.GraphQLSchemas {
+		if g.Endpoint == "" {
+			continue
+		}
+		findID := fmt.Sprintf("webscope-graphql-%s", g.Endpoint)
+		evidence := map[string]any{
+			"endpoint": g.Endpoint,
+			"source":   g.Source,
+		}
+		if len(g.Queries) > 0 {
+			evidence["queries"] = g.Queries
+		}
+		if len(g.Mutations) > 0 {
+			evidence["mutations"] = g.Mutations
+		}
+		if len(g.Subscriptions) > 0 {
+			evidence["subscriptions"] = g.Subscriptions
+		}
+		result.Findings = append(result.Findings, graph.Finding{
+			ID:         findID,
+			Type:       "graphql-endpoint",
+			Title:      fmt.Sprintf("GraphQL endpoint: %s", g.Endpoint),
+			Severity:   "high",
+			Confidence: "firm",
+			Tool:       "webscope",
+			Evidence:   evidence,
+			FirstSeen:  now,
+			LastSeen:   now,
+		})
+		// Also create an Endpoint node for the GraphQL URL.
+		epKey := endpointID(baseURL, "POST", g.Endpoint)
+		result.Nodes = append(result.Nodes, graph.Node{
+			Type:       graph.NodeEndpoint,
+			PrimaryKey: epKey,
+			Props: map[string]any{
+				"endpoint_id": epKey,
+				"url":         baseURL,
+				"method":      "POST",
+				"path":        g.Endpoint,
+				"source":      g.Source,
+				"type":        "graphql",
+			},
+		})
+		result.Edges = append(result.Edges, graph.Edge{
+			Type:     graph.RelEXPOSES,
+			FromType: graph.NodeURL,
+			FromKey:  trigger.PrimaryKey,
+			ToType:   graph.NodeEndpoint,
+			ToKey:    epKey,
+		})
+	}
+
+	// Process WebSocket endpoints → Findings.
+	for _, ws := range out.WebSockets {
+		if ws.URL == "" {
+			continue
+		}
+		findID := fmt.Sprintf("webscope-websocket-%s", ws.URL)
+		result.Findings = append(result.Findings, graph.Finding{
+			ID:         findID,
+			Type:       "websocket-endpoint",
+			Title:      fmt.Sprintf("WebSocket endpoint: %s", ws.URL),
+			Severity:   "medium",
+			Confidence: "firm",
+			Tool:       "webscope",
+			Evidence: map[string]any{
+				"url":         ws.URL,
+				"protocol":    ws.Protocol,
+				"subprotocol": ws.Subprotocol,
+				"source":      ws.Source,
+			},
+			FirstSeen: now,
+			LastSeen:  now,
 		})
 	}
 

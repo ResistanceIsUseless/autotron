@@ -313,8 +313,8 @@ enrichers:
         - "-json"
         - "-quiet"
         - "-flow"
-        - "in-depth"
-      timeout: 15m
+        - "intense"
+      timeout: 30m
       retries: 1
     concurrency: 8
     enabled: true

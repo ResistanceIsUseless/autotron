@@ -102,6 +102,31 @@ func (p *urlListParser) Parse(ctx context.Context, trigger graph.Node, stdout io
 			// We don't create a formal edge here — the URL node's existence
 			// and the enriched_by stamp on the trigger provide lineage.
 		}
+
+		// Also create a JSFile node for JavaScript URLs so they appear in JS Assets.
+		if isJSURL(normalized) {
+			key := jsFileIDFromURL(normalized)
+			if !seen[key] {
+				seen[key] = true
+				result.Nodes = append(result.Nodes, graph.Node{
+					Type:       graph.NodeJSFile,
+					PrimaryKey: key,
+					Props: map[string]any{
+						"jsfile_id": key,
+						"url":       normalized,
+						"sha256":    "unknown",
+					},
+				})
+				// Link the URL node to the JSFile.
+				result.Edges = append(result.Edges, graph.Edge{
+					Type:     graph.RelLOADS,
+					FromType: graph.NodeURL,
+					FromKey:  normalized,
+					ToType:   graph.NodeJSFile,
+					ToKey:    key,
+				})
+			}
+		}
 	}
 
 	return result, scanner.Err()
