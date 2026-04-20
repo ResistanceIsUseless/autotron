@@ -220,21 +220,30 @@ func (ioDiscard) Write(p []byte) (int, error) { return len(p), nil }
 
 // cleanupTestDomain removes all nodes and relationships created by an
 // integration test. It deletes:
+//   - Service nodes whose fqdn ends with the domain
+//   - URL nodes whose url contains the domain
+//   - Finding nodes linked to any of the above
+//   - Subdomain nodes ending with the domain
 //   - The Domain node with the given fqdn
-//   - Any Subdomain nodes ending with the domain (e.g. sub1.<domain>)
-//   - Any ScanRun nodes whose target matches the domain
-//   - All relationships attached to the above nodes
-//   - Any Finding nodes linked to the above nodes
+//   - ScanRun nodes whose target matches the domain
 func cleanupTestDomain(t *testing.T, client *graph.Client, domain string) {
 	t.Helper()
 	ctx := context.Background()
 
-	// Delete subdomains and their relationships.
+	// Delete findings linked to services of this domain.
 	if err := client.RunCypher(ctx,
-		"MATCH (n:Subdomain) WHERE n.fqdn ENDS WITH $domain DETACH DELETE n",
+		"MATCH (s:Service)-[:HAS_FINDING]->(f:Finding) WHERE s.fqdn ENDS WITH $domain DETACH DELETE f",
 		map[string]any{"domain": domain},
 	); err != nil {
-		t.Logf("cleanup subdomain nodes: %v", err)
+		t.Logf("cleanup service findings: %v", err)
+	}
+
+	// Delete findings linked to URLs of this domain.
+	if err := client.RunCypher(ctx,
+		"MATCH (u:URL)-[:HAS_FINDING]->(f:Finding) WHERE u.url CONTAINS $domain DETACH DELETE f",
+		map[string]any{"domain": domain},
+	); err != nil {
+		t.Logf("cleanup url findings: %v", err)
 	}
 
 	// Delete findings linked to the domain or its subdomains.
@@ -243,6 +252,30 @@ func cleanupTestDomain(t *testing.T, client *graph.Client, domain string) {
 		map[string]any{"domain": domain},
 	); err != nil {
 		t.Logf("cleanup findings: %v", err)
+	}
+
+	// Delete URL nodes.
+	if err := client.RunCypher(ctx,
+		"MATCH (u:URL) WHERE u.url CONTAINS $domain DETACH DELETE u",
+		map[string]any{"domain": domain},
+	); err != nil {
+		t.Logf("cleanup url nodes: %v", err)
+	}
+
+	// Delete Service nodes.
+	if err := client.RunCypher(ctx,
+		"MATCH (s:Service) WHERE s.fqdn ENDS WITH $domain DETACH DELETE s",
+		map[string]any{"domain": domain},
+	); err != nil {
+		t.Logf("cleanup service nodes: %v", err)
+	}
+
+	// Delete subdomains and their relationships.
+	if err := client.RunCypher(ctx,
+		"MATCH (n:Subdomain) WHERE n.fqdn ENDS WITH $domain DETACH DELETE n",
+		map[string]any{"domain": domain},
+	); err != nil {
+		t.Logf("cleanup subdomain nodes: %v", err)
 	}
 
 	// Delete the domain node itself.

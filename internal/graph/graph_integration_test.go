@@ -17,6 +17,7 @@ func TestGraphIntegration_QueryPendingAndMarkEnriched(t *testing.T) {
 	client := mustIntegrationClient(t, ctx)
 
 	domain := fmt.Sprintf("it-graph-%d.example.com", time.Now().UnixNano())
+	t.Cleanup(func() { cleanupTestNodes(t, client, domain) })
 	if _, err := client.UpsertNode(ctx, Node{
 		Type:       NodeDomain,
 		PrimaryKey: domain,
@@ -54,6 +55,7 @@ func TestGraphIntegration_QueryPendingWithEdgeContext(t *testing.T) {
 	client := mustIntegrationClient(t, ctx)
 
 	sub := fmt.Sprintf("it-edge-%d.example.com", time.Now().UnixNano())
+	t.Cleanup(func() { cleanupTestNodes(t, client, sub) })
 	serviceKey := sub + ":443"
 
 	if _, err := client.UpsertNode(ctx, Node{
@@ -124,6 +126,10 @@ func TestGraphIntegration_UpsertFindingCorrelatesDuplicateSignals(t *testing.T) 
 	client := mustIntegrationClient(t, ctx)
 
 	url := fmt.Sprintf("https://it-corr-%d.example.com", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = client.RunCypher(ctx, "MATCH (u:URL {url: $url})-[:HAS_FINDING]->(f:Finding) DETACH DELETE f", map[string]any{"url": url})
+		_ = client.RunCypher(ctx, "MATCH (u:URL {url: $url}) DETACH DELETE u", map[string]any{"url": url})
+	})
 	if _, err := client.UpsertNode(ctx, Node{
 		Type:       NodeURL,
 		PrimaryKey: url,
@@ -234,6 +240,10 @@ func TestGraphIntegration_TopFindingsReportView(t *testing.T) {
 	client := mustIntegrationClient(t, ctx)
 
 	url := fmt.Sprintf("https://it-report-%d.example.com", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_ = client.RunCypher(ctx, "MATCH (u:URL {url: $url})-[:HAS_FINDING]->(f:Finding) DETACH DELETE f", map[string]any{"url": url})
+		_ = client.RunCypher(ctx, "MATCH (u:URL {url: $url}) DETACH DELETE u", map[string]any{"url": url})
+	})
 	if _, err := client.UpsertNode(ctx, Node{
 		Type:       NodeURL,
 		PrimaryKey: url,
@@ -283,6 +293,7 @@ func TestGraphIntegration_BuildAndRenderHostReport(t *testing.T) {
 	client := mustIntegrationClient(t, ctx)
 
 	host := fmt.Sprintf("it-hostreport-%d.example.com", time.Now().UnixNano())
+	t.Cleanup(func() { cleanupTestNodes(t, client, host) })
 	ip := "198.51.100.77"
 	serviceKey := host + ":443"
 	reportURL := "https://" + host + "/api/health"
@@ -364,3 +375,40 @@ func envOrDefault(key, fallback string) string {
 type ioDiscard struct{}
 
 func (ioDiscard) Write(p []byte) (int, error) { return len(p), nil }
+
+// cleanupTestNodes removes test nodes matching a domain suffix from Neo4j.
+// It handles Domain, Subdomain, Service, URL, Finding, and ScanRun nodes.
+func cleanupTestNodes(t *testing.T, client *Client, domainSuffix string) {
+	t.Helper()
+	ctx := context.Background()
+
+	// Delete findings linked to test nodes.
+	_ = client.RunCypher(ctx,
+		"MATCH (f:Finding) WHERE f.id CONTAINS $suffix DETACH DELETE f",
+		map[string]any{"suffix": domainSuffix})
+
+	// Delete URLs matching the suffix.
+	_ = client.RunCypher(ctx,
+		"MATCH (u:URL) WHERE u.url CONTAINS $suffix DETACH DELETE u",
+		map[string]any{"suffix": domainSuffix})
+
+	// Delete services matching the suffix.
+	_ = client.RunCypher(ctx,
+		"MATCH (s:Service) WHERE s.fqdn ENDS WITH $suffix DETACH DELETE s",
+		map[string]any{"suffix": domainSuffix})
+
+	// Delete subdomains matching the suffix.
+	_ = client.RunCypher(ctx,
+		"MATCH (n:Subdomain) WHERE n.fqdn ENDS WITH $suffix DETACH DELETE n",
+		map[string]any{"suffix": domainSuffix})
+
+	// Delete domain nodes.
+	_ = client.RunCypher(ctx,
+		"MATCH (n:Domain) WHERE n.fqdn ENDS WITH $suffix DETACH DELETE n",
+		map[string]any{"suffix": domainSuffix})
+
+	// Delete scan runs.
+	_ = client.RunCypher(ctx,
+		"MATCH (n:ScanRun) WHERE n.target ENDS WITH $suffix DETACH DELETE n",
+		map[string]any{"suffix": domainSuffix})
+}

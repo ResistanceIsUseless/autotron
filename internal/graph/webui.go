@@ -426,6 +426,82 @@ ORDER BY enricher`, nodeType)
 	return out, nil
 }
 
+// HostFinding represents a single finding associated with a host's services/URLs.
+type HostFinding struct {
+	FindingID  string `json:"finding_id"`
+	Title      string `json:"title"`
+	Type       string `json:"type"`
+	Severity   string `json:"severity"`
+	Confidence string `json:"confidence"`
+	Tool       string `json:"tool"`
+	Evidence   string `json:"evidence"`
+	FirstSeen  string `json:"first_seen"`
+	LastSeen   string `json:"last_seen"`
+	ParentType string `json:"parent_type"`
+	ParentKey  string `json:"parent_key"`
+}
+
+// FindingsByFQDN returns all findings linked to services (and their URLs) for a given FQDN.
+func (c *Client) FindingsByFQDN(ctx context.Context, fqdn string) ([]HostFinding, error) {
+	session := c.driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeRead})
+	defer session.Close(ctx)
+
+	query := `
+MATCH (s:Service)
+WHERE s.fqdn = $fqdn
+OPTIONAL MATCH (s)-[:HAS_FINDING]->(f1:Finding)
+WITH s, collect({f: f1, ptype: 'Service', pkey: coalesce(s.fqdn_port, '')}) AS svc_findings
+OPTIONAL MATCH (s)-[:EXPOSES]->(u:URL)-[:HAS_FINDING]->(f2:Finding)
+WITH svc_findings + collect({f: f2, ptype: 'URL', pkey: coalesce(u.url, '')}) AS all_findings
+UNWIND all_findings AS item
+WITH item.f AS f, item.ptype AS ptype, item.pkey AS pkey
+WHERE f IS NOT NULL
+RETURN DISTINCT
+  coalesce(f.id, f.finding_id, '') AS finding_id,
+  coalesce(f.title, '') AS title,
+  coalesce(f.type, '') AS type,
+  coalesce(f.severity, 'info') AS severity,
+  coalesce(f.confidence, '') AS confidence,
+  coalesce(f.tool, '') AS tool,
+  coalesce(f.evidence, '') AS evidence,
+  coalesce(f.first_seen, '') AS first_seen,
+  coalesce(f.last_seen, '') AS last_seen,
+  ptype AS parent_type,
+  pkey AS parent_key
+ORDER BY
+  CASE coalesce(f.severity, 'info')
+    WHEN 'critical' THEN 5 WHEN 'high' THEN 4 WHEN 'medium' THEN 3 WHEN 'low' THEN 2 ELSE 1
+  END DESC,
+  f.last_seen DESC`
+
+	result, err := session.Run(ctx, query, map[string]any{"fqdn": fqdn})
+	if err != nil {
+		return nil, fmt.Errorf("query findings by fqdn: %w", err)
+	}
+
+	var out []HostFinding
+	for result.Next(ctx) {
+		rec := result.Record()
+		out = append(out, HostFinding{
+			FindingID:  fmt.Sprintf("%v", recordValue(rec, "finding_id")),
+			Title:      fmt.Sprintf("%v", recordValue(rec, "title")),
+			Type:       fmt.Sprintf("%v", recordValue(rec, "type")),
+			Severity:   fmt.Sprintf("%v", recordValue(rec, "severity")),
+			Confidence: fmt.Sprintf("%v", recordValue(rec, "confidence")),
+			Tool:       fmt.Sprintf("%v", recordValue(rec, "tool")),
+			Evidence:   fmt.Sprintf("%v", recordValue(rec, "evidence")),
+			FirstSeen:  fmt.Sprintf("%v", recordValue(rec, "first_seen")),
+			LastSeen:   fmt.Sprintf("%v", recordValue(rec, "last_seen")),
+			ParentType: fmt.Sprintf("%v", recordValue(rec, "parent_type")),
+			ParentKey:  fmt.Sprintf("%v", recordValue(rec, "parent_key")),
+		})
+	}
+	if err := result.Err(); err != nil {
+		return nil, fmt.Errorf("query findings by fqdn: %w", err)
+	}
+	return out, nil
+}
+
 // RecentActivity represents a recent graph event for the activity feed.
 type RecentActivity struct {
 	Type      string `json:"type"`

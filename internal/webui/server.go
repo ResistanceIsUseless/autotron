@@ -46,10 +46,13 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/data/services", s.handleServices)
 	mux.HandleFunc("/api/top-findings", s.handleTopFindings)
 	mux.HandleFunc("/api/enricher-progress", s.handleEnricherProgress)
+	mux.HandleFunc("/api/findings-by-host", s.handleFindingsByHost)
 	mux.HandleFunc("/api/activity", s.handleActivity)
 	mux.HandleFunc("/api/assets/domain", s.handleAssetDomain)
 	mux.HandleFunc("/api/assets/url", s.handleAssetURL)
 	mux.HandleFunc("/api/assets/jsfile", s.handleAssetJSFile)
+	mux.HandleFunc("/api/assets/service", s.handleAssetService)
+	mux.HandleFunc("/api/assets/finding", s.handleAssetFinding)
 	mux.HandleFunc("/api/jsrecon/monitor", s.handleMonitorAdd)
 	mux.HandleFunc("/api/jsrecon/monitor/check", s.handleMonitorCheck)
 	mux.HandleFunc("/api/jsrecon/monitor/list", s.handleMonitorList)
@@ -402,6 +405,20 @@ func parseInt(s string) (int, error) {
 	return n, err
 }
 
+func (s *Server) handleFindingsByHost(w http.ResponseWriter, r *http.Request) {
+	fqdn := strings.TrimSpace(r.URL.Query().Get("fqdn"))
+	if fqdn == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "fqdn query param required"})
+		return
+	}
+	items, err := s.graphClient.FindingsByFQDN(r.Context(), fqdn)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
+}
+
 func (s *Server) handleEnricherProgress(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	items, err := s.graphClient.ListEnricherProgress(ctx, s.enricherInfo)
@@ -544,6 +561,70 @@ func (s *Server) handleAssetJSFile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "deleted": jsfileID})
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+	}
+}
+
+func (s *Server) handleAssetService(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	switch r.Method {
+	case http.MethodDelete:
+		fqdn := strings.TrimSpace(r.URL.Query().Get("fqdn"))
+		fqdnPort := strings.TrimSpace(r.URL.Query().Get("fqdn_port"))
+		if fqdn == "" && fqdnPort == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "fqdn or fqdn_port query param required"})
+			return
+		}
+		if fqdnPort != "" {
+			if err := s.graphClient.RemoveService(ctx, fqdnPort); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "deleted": fqdnPort})
+		} else {
+			if err := s.graphClient.RemoveServicesByFQDN(ctx, fqdn); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "deleted_fqdn": fqdn})
+		}
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+	}
+}
+
+func (s *Server) handleAssetFinding(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	switch r.Method {
+	case http.MethodDelete:
+		findingID := strings.TrimSpace(r.URL.Query().Get("id"))
+		if findingID == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "id query param required"})
+			return
+		}
+		if err := s.graphClient.RemoveFinding(ctx, findingID); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "deleted": findingID})
+	case http.MethodPatch:
+		findingID := strings.TrimSpace(r.URL.Query().Get("id"))
+		severity := strings.TrimSpace(r.URL.Query().Get("severity"))
+		if findingID == "" || severity == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "id and severity query params required"})
+			return
+		}
+		valid := map[string]bool{"info": true, "low": true, "medium": true, "high": true, "critical": true}
+		if !valid[severity] {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "severity must be info, low, medium, high, or critical"})
+			return
+		}
+		if err := s.graphClient.UpdateFindingSeverity(ctx, findingID, severity); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": findingID, "severity": severity})
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
 	}

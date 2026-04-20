@@ -727,3 +727,53 @@ func (c *Client) AddJSFile(ctx context.Context, jsfileID string, jsURL string) e
 func (c *Client) RemoveJSFile(ctx context.Context, jsfileID string) error {
 	return c.RunCypher(ctx, `MATCH (n:JSFile {jsfile_id: $key}) DETACH DELETE n`, map[string]any{"key": jsfileID})
 }
+
+// RemoveService removes a Service node and all its relationships (including
+// any Finding nodes only connected through this service).
+func (c *Client) RemoveService(ctx context.Context, fqdnPort string) error {
+	// First delete findings only connected to this service (not shared with other parents).
+	if err := c.RunCypher(ctx, `
+MATCH (s:Service {fqdn_port: $key})-[:HAS_FINDING]->(f:Finding)
+WHERE NOT exists { (other)-[:HAS_FINDING]->(f) WHERE other <> s }
+DETACH DELETE f`, map[string]any{"key": fqdnPort}); err != nil {
+		return fmt.Errorf("remove service findings: %w", err)
+	}
+	// Also delete findings on URLs exposed only by this service.
+	if err := c.RunCypher(ctx, `
+MATCH (s:Service {fqdn_port: $key})-[:EXPOSES]->(u:URL)-[:HAS_FINDING]->(f:Finding)
+WHERE NOT exists { (other)-[:HAS_FINDING]->(f) WHERE other <> u }
+DETACH DELETE f`, map[string]any{"key": fqdnPort}); err != nil {
+		return fmt.Errorf("remove service url findings: %w", err)
+	}
+	return c.RunCypher(ctx, `MATCH (n:Service {fqdn_port: $key}) DETACH DELETE n`, map[string]any{"key": fqdnPort})
+}
+
+// RemoveServicesByFQDN removes all Service nodes for a given FQDN and their
+// orphaned findings.
+func (c *Client) RemoveServicesByFQDN(ctx context.Context, fqdn string) error {
+	// Delete findings only connected to services of this fqdn.
+	if err := c.RunCypher(ctx, `
+MATCH (s:Service {fqdn: $fqdn})-[:HAS_FINDING]->(f:Finding)
+WHERE NOT exists { (other)-[:HAS_FINDING]->(f) WHERE other <> s }
+DETACH DELETE f`, map[string]any{"fqdn": fqdn}); err != nil {
+		return fmt.Errorf("remove fqdn service findings: %w", err)
+	}
+	if err := c.RunCypher(ctx, `
+MATCH (s:Service {fqdn: $fqdn})-[:EXPOSES]->(u:URL)-[:HAS_FINDING]->(f:Finding)
+WHERE NOT exists { (other)-[:HAS_FINDING]->(f) WHERE other <> u }
+DETACH DELETE f`, map[string]any{"fqdn": fqdn}); err != nil {
+		return fmt.Errorf("remove fqdn url findings: %w", err)
+	}
+	return c.RunCypher(ctx, `MATCH (n:Service {fqdn: $fqdn}) DETACH DELETE n`, map[string]any{"fqdn": fqdn})
+}
+
+// RemoveFinding removes a Finding node and all its relationships.
+func (c *Client) RemoveFinding(ctx context.Context, findingID string) error {
+	return c.RunCypher(ctx, `MATCH (n:Finding {id: $key}) DETACH DELETE n`, map[string]any{"key": findingID})
+}
+
+// UpdateFindingSeverity sets the severity property on a Finding node.
+func (c *Client) UpdateFindingSeverity(ctx context.Context, findingID, severity string) error {
+	return c.RunCypher(ctx, `MATCH (n:Finding {id: $key}) SET n.severity = $sev`,
+		map[string]any{"key": findingID, "sev": severity})
+}

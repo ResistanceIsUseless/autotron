@@ -98,6 +98,20 @@ const indexHTML = `<!doctype html>
     .dns-toggle:hover { color: var(--accent); }
     .dns-caret { display: inline-block; width: 14px; color: var(--muted); }
 
+    .finding-toggle { background: none; border: none; color: var(--ink); padding: 0; cursor: pointer; font-family: inherit; font-size: 12px; font-weight: 600; text-align: left; }
+    .finding-toggle:hover { color: var(--accent); }
+
+    .evidence-block { background: var(--bg2); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; margin: 4px 0 8px 0; font-size: 11px; }
+    .evidence-block .ev-row { display: flex; gap: 8px; padding: 2px 0; border-bottom: 1px solid var(--line); }
+    .evidence-block .ev-row:last-child { border-bottom: none; }
+    .evidence-block .ev-key { color: var(--muted); min-width: 100px; flex-shrink: 0; }
+    .evidence-block .ev-val { color: var(--ink2); word-break: break-all; }
+
+    .host-findings { margin: 8px 0 8px 28px; }
+    .host-findings-header { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+    .host-finding-item { display: flex; align-items: center; gap: 8px; padding: 3px 0; border-bottom: 1px solid var(--line); font-size: 11px; }
+    .host-finding-item:last-child { border-bottom: none; }
+
     .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     .tiny { font-size: 11px; }
 
@@ -193,7 +207,7 @@ const indexHTML = `<!doctype html>
         </div>
       </div>
       <table>
-        <thead><tr><th>Host</th><th>Ports</th><th>CDN</th><th>Last Seen</th></tr></thead>
+        <thead><tr><th>Host</th><th>Ports</th><th>CDN</th><th>Last Seen</th><th style="width:30px"></th></tr></thead>
         <tbody id="serviceRows"></tbody>
       </table>
     </div>
@@ -285,6 +299,8 @@ const indexHTML = `<!doctype html>
     let jsItems = [], monitoredSet = new Set(), scanIsRunning = false, allServiceItems = [];
     let changePage = { limit: 50, offset: 0, has_more: false };
     let expandedServiceGroups = new Set(), serviceGroupMap = {};
+    let expandedFindings = new Set(), findingsData = [];
+    let hostFindingsCache = {};
     let pollTimer = null;
     const POLL_INTERVAL = 8000;
 
@@ -350,22 +366,64 @@ const indexHTML = `<!doctype html>
 
     async function loadFindings() {
       const data = await j('/api/top-findings');
-      document.getElementById('findingRows').innerHTML = (data.items || []).map(f => {
+      findingsData = data.items || [];
+      renderFindings();
+    }
+
+    function renderFindings() {
+      document.getElementById('findingRows').innerHTML = findingsData.map((f, idx) => {
         const hosts = (f.assets||[]).slice(0,5).map(a => '<div>' + esc(a) + '</div>').join('');
         const more = (f.asset_count||0) > 5 ? '<div class="tiny" style="color:var(--muted)">+' + ((f.asset_count||0)-5) + ' more</div>' : '';
         const typeStr = (f.type||'').replace(/^cve-/i,'').toUpperCase();
         const toolStr = (f.tools||[]).join(', ');
-        return '<tr>' +
-          '<td><span class="pill ' + sevClass(f.severity) + '">' + esc(f.severity) + '</span></td>' +
-          '<td><div style="font-weight:600;color:var(--ink)">' + esc(f.title) + '</div>' +
-            (typeStr ? '<div class="tiny" style="color:var(--accent2)">' + esc(typeStr) + '</div>' : '') +
-            '<div class="tiny" style="color:var(--muted)">' + esc(toolStr) + ' &middot; ' + esc(f.confidence||'') + '</div>' +
+        const fid = 'f' + idx;
+        const exp = expandedFindings.has(fid);
+        let row = '<tr><td><span class="pill ' + sevClass(f.severity) + '">' + esc(f.severity) + '</span></td>' +
+          '<td><button class="finding-toggle" onclick="toggleFinding(\'' + fid + '\')"><span class="dns-caret">' + (exp?'&#9662;':'&#9656;') + '</span>' + esc(f.title) + '</button>' +
+            (typeStr ? '<div class="tiny" style="color:var(--accent2);margin-left:14px;">' + esc(typeStr) + '</div>' : '') +
+            '<div class="tiny" style="color:var(--muted);margin-left:14px;">' + esc(toolStr) + ' &middot; ' + esc(f.confidence||'') + '</div>' +
           '</td>' +
           '<td class="tiny">' + hosts + more + '</td>' +
           '<td>' + esc(f.asset_count) + '</td>' +
-          '<td class="tiny">' + relTime(f.last_seen) + '</td>' +
-        '</tr>';
+          '<td class="tiny">' + relTime(f.last_seen) + '</td></tr>';
+        if (exp) {
+          row += '<tr><td colspan="5" style="padding:4px 8px 12px 24px;border-bottom:1px solid var(--line);">' + renderFindingDetail(f) + '</td></tr>';
+        }
+        return row;
       }).join('');
+    }
+
+    function toggleFinding(fid) {
+      if (expandedFindings.has(fid)) expandedFindings.delete(fid);
+      else expandedFindings.add(fid);
+      renderFindings();
+    }
+
+    function renderFindingDetail(f) {
+      let html = '<div class="evidence-block">';
+      const rows = [];
+      if (f.id) rows.push(['ID', f.id]);
+      if (f.type) rows.push(['Type', f.type]);
+      if (f.confidence) rows.push(['Confidence', f.confidence]);
+      if (f.canonical_key) rows.push(['Key', f.canonical_key]);
+      if ((f.tools||[]).length) rows.push(['Tools', f.tools.join(', ')]);
+      if (f.last_seen) rows.push(['Last Seen', f.last_seen]);
+      if ((f.assets||[]).length) rows.push(['Affected', f.assets.join(', ')]);
+      for (const [k,v] of rows) {
+        html += '<div class="ev-row"><span class="ev-key">' + esc(k) + '</span><span class="ev-val">' + esc(String(v)) + '</span></div>';
+      }
+      html += '</div>';
+      if (f.id) {
+        const sevOpts = ['info','low','medium','high','critical'].map(s =>
+          '<option value="' + s + '"' + (s === (f.severity||'').toLowerCase() ? ' selected' : '') + '>' + s + '</option>'
+        ).join('');
+        html += '<div style="margin-top:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">';
+        html += '<label style="font-size:10px;color:var(--muted);">Severity:</label>';
+        html += '<select onchange="reclassifyFinding(\'' + esc(f.id).replace(/'/g, "\\\\'") + '\', this.value)" style="font-size:11px;padding:2px 4px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:3px;">' + sevOpts + '</select>';
+        html += '<button onclick="deleteFinding(\'' + esc(f.id).replace(/'/g, "\\\\'") + '\')" style="color:var(--red);border-color:var(--red);font-size:10px;">Delete</button>';
+        html += '</div>';
+      }
+      return html;
     }
 
     async function loadServices() {
@@ -418,7 +476,7 @@ const indexHTML = `<!doctype html>
         const exp = expandedServiceGroups.has(dns);
         const last = services.map(s=>s.last_seen||'').filter(Boolean).sort().reverse()[0]||'';
         const cdnLabel = services.map(s=>s.cdn_name).filter(Boolean).filter((v,j,a)=>a.indexOf(v)===j).join(', ');
-        html.push('<tr><td><button class="dns-toggle" onclick="toggleSG(\'' + esc(dns).replace(/'/g, "\\\\'") + '\')"><span class="dns-caret">' + (exp?'&#9662;':'&#9656;') + '</span>' + esc(dns) + '</button></td><td class="tiny">' + services.map(s=>s.port).join(', ') + '</td><td class="tiny" style="color:var(--accent2)">' + esc(cdnLabel) + '</td><td class="tiny">' + relTime(last) + '</td></tr>');
+        html.push('<tr><td><button class="dns-toggle" onclick="toggleSG(\'' + esc(dns).replace(/'/g, "\\\\'") + '\')"><span class="dns-caret">' + (exp?'&#9662;':'&#9656;') + '</span>' + esc(dns) + '</button></td><td class="tiny">' + services.map(s=>s.port).join(', ') + '</td><td class="tiny" style="color:var(--accent2)">' + esc(cdnLabel) + '</td><td class="tiny">' + relTime(last) + '</td><td><button onclick="deleteHost(\'' + esc(dns).replace(/'/g, "\\\\'") + '\')" style="color:var(--red);border-color:var(--red);font-size:10px;">x</button></td></tr>');
         if (exp) {
           for (const s of services) {
             const proto = s.tls ? 'tcp/tls' : 'tcp';
@@ -426,7 +484,7 @@ const indexHTML = `<!doctype html>
             const ver = [s.version, s.server, s.banner].filter(Boolean).filter((v,j,a) => a.indexOf(v)===j).join(' ');
             const stateColor = s.status === 'open' ? 'var(--green)' : s.status === 'filtered' ? 'var(--yellow)' : 'var(--muted)';
 
-            html.push('<tr><td colspan="4" style="padding:0 0 0 28px;border-bottom:none;">');
+            html.push('<tr><td colspan="5" style="padding:0 0 0 28px;border-bottom:none;">');
             html.push('<table style="width:100%;margin:2px 0 4px 0;">');
             html.push('<tr>');
             html.push('<td class="tiny" style="width:80px"><span style="color:var(--accent2)">' + esc(s.port) + '/' + proto + '</span></td>');
@@ -440,7 +498,7 @@ const indexHTML = `<!doctype html>
               const expiryColor = expiryDate && (expiryDate - now) < thirtyDays ? 'var(--red)' : expiryDate && (expiryDate - now) < 90*86400*1000 ? 'var(--yellow)' : 'var(--muted)';
               const wc = s.tls_wildcard ? ' <span class="pill sev-info">wildcard</span>' : '';
 
-              html.push('<tr><td colspan="4" style="padding:2px 8px;border-bottom:none;">');
+              html.push('<tr><td colspan="5" style="padding:2px 8px;border-bottom:none;">');
               html.push('<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:11px;">');
               html.push('<span><span style="color:var(--muted)">CN:</span> <span style="color:var(--ink2)">' + esc(s.tls_subject_cn) + '</span>' + wc + '</span>');
               html.push('<span><span style="color:var(--muted)">Issuer:</span> <span style="color:var(--ink2)">' + esc(s.tls_issuer_org || s.tls_issuer_cn) + '</span></span>');
@@ -456,26 +514,48 @@ const indexHTML = `<!doctype html>
             }
 
             if (s.jarm) {
-              html.push('<tr><td colspan="4" style="padding:2px 8px;border-bottom:none;font-size:11px;">');
+              html.push('<tr><td colspan="5" style="padding:2px 8px;border-bottom:none;font-size:11px;">');
               html.push('<span style="color:var(--muted)">JARM:</span> <span style="color:var(--purple);font-family:monospace;font-size:10px;">' + esc(s.jarm) + '</span>');
               html.push('</td></tr>');
             }
 
             if (s.cdn_name) {
-              html.push('<tr><td colspan="4" style="padding:2px 8px;border-bottom:none;font-size:11px;">');
+              html.push('<tr><td colspan="5" style="padding:2px 8px;border-bottom:none;font-size:11px;">');
               html.push('<span style="color:var(--muted)">CDN:</span> <span style="color:var(--accent2)">' + esc(s.cdn_name) + (s.cdn_type ? ' (' + esc(s.cdn_type) + ')' : '') + '</span>');
               html.push('</td></tr>');
             }
 
             if (s.ip) {
-              html.push('<tr><td colspan="4" style="padding:2px 8px;border-bottom:none;font-size:11px;">');
+              html.push('<tr><td colspan="5" style="padding:2px 8px;border-bottom:none;font-size:11px;">');
               html.push('<span style="color:var(--muted)">IP:</span> <span style="color:var(--ink2)">' + esc(s.ip) + '</span>');
               html.push('</td></tr>');
             }
 
             html.push('</table></td></tr>');
           }
-          html.push('<tr><td colspan="4" style="border-bottom:2px solid var(--line);padding:0;"></td></tr>');
+          // Host findings section
+          html.push('<tr><td colspan="5" style="padding:0;border-bottom:none;"><div class="host-findings" id="hf-' + esc(dns) + '">');
+          const cached = hostFindingsCache[dns];
+          if (cached === undefined) {
+            html.push('<div class="tiny" style="color:var(--muted);padding:4px;">Loading findings...</div>');
+            loadHostFindings(dns);
+          } else if (cached.length === 0) {
+            html.push('<div class="tiny" style="color:var(--muted);padding:4px;">No findings</div>');
+          } else {
+            html.push('<div class="host-findings-header">Findings (' + cached.length + ')</div>');
+            for (const hf of cached) {
+              html.push('<div class="host-finding-item">');
+              html.push('<span class="pill ' + sevClass(hf.severity) + '">' + esc(hf.severity) + '</span>');
+              html.push('<span style="font-weight:600;color:var(--ink)">' + esc(hf.title) + '</span>');
+              html.push('<span style="color:var(--muted)">' + esc(hf.tool) + '</span>');
+              html.push('<span style="color:var(--accent2)">' + esc(hf.parent_type === 'URL' ? hf.parent_key : '') + '</span>');
+              html.push('<span style="color:var(--muted);margin-left:auto;white-space:nowrap;">' + relTime(hf.last_seen) + '</span>');
+              if (hf.finding_id) html.push('<button onclick="deleteFinding(\'' + esc(hf.finding_id).replace(/'/g, "\\\\'") + '\')" style="color:var(--red);border-color:var(--red);font-size:9px;margin-left:4px;">x</button>');
+              html.push('</div>');
+            }
+          }
+          html.push('</div></td></tr>');
+          html.push('<tr><td colspan="5" style="border-bottom:2px solid var(--line);padding:0;"></td></tr>');
         }
       }
       document.getElementById('serviceRows').innerHTML = html.join('');
@@ -483,6 +563,12 @@ const indexHTML = `<!doctype html>
     function toggleSG(dns) {
       if (expandedServiceGroups.has(dns)) expandedServiceGroups.delete(dns);
       else expandedServiceGroups.add(dns);
+      renderServices();
+    }
+
+    async function loadHostFindings(dns) {
+      const data = await j('/api/findings-by-host?fqdn=' + encodeURIComponent(dns));
+      hostFindingsCache[dns] = data.items || [];
       renderServices();
     }
 
@@ -652,6 +738,23 @@ const indexHTML = `<!doctype html>
       if (!confirm('Delete JS file node?')) return;
       const d = await j('/api/assets/jsfile?id=' + encodeURIComponent(id), { method:'DELETE' });
       if (d.ok) await Promise.all([loadSummary(), loadJSFiles()]);
+      else alert('Failed: ' + (d.error||JSON.stringify(d)));
+    }
+    async function deleteHost(fqdn) {
+      if (!confirm('Delete all services for ' + fqdn + ' and their findings?')) return;
+      const d = await j('/api/assets/service?fqdn=' + encodeURIComponent(fqdn), { method:'DELETE' });
+      if (d.ok) { delete hostFindingsCache[fqdn]; expandedServiceGroups.delete(fqdn); await Promise.all([loadSummary(), loadServices(), loadFindings()]); }
+      else alert('Failed: ' + (d.error||JSON.stringify(d)));
+    }
+    async function deleteFinding(findingID) {
+      if (!confirm('Delete finding ' + findingID + '?')) return;
+      const d = await j('/api/assets/finding?id=' + encodeURIComponent(findingID), { method:'DELETE' });
+      if (d.ok) { hostFindingsCache = {}; await Promise.all([loadSummary(), loadFindings(), loadServices()]); }
+      else alert('Failed: ' + (d.error||JSON.stringify(d)));
+    }
+    async function reclassifyFinding(findingID, severity) {
+      const d = await j('/api/assets/finding?id=' + encodeURIComponent(findingID) + '&severity=' + encodeURIComponent(severity), { method:'PATCH' });
+      if (d.ok) { hostFindingsCache = {}; await Promise.all([loadSummary(), loadFindings()]); }
       else alert('Failed: ' + (d.error||JSON.stringify(d)));
     }
 
