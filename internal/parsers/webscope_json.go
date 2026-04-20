@@ -130,6 +130,12 @@ func (p *webscopeJSONParser) Parse(ctx context.Context, trigger graph.Node, stdo
 	seenURLs := make(map[string]bool)
 	seenJS := make(map[string]bool)
 
+	// Determine the edge source type based on the trigger node.
+	// When triggered by a Service node, edges originate from the Service.
+	// When triggered by a URL node (legacy), edges originate from the URL.
+	fromType := trigger.Type
+	fromKey := trigger.PrimaryKey
+
 	// Process paths → URL nodes (and JSFile nodes for .js URLs).
 	for _, p := range out.Paths {
 		if p.URL == "" || seenURLs[p.URL] {
@@ -149,6 +155,17 @@ func (p *webscopeJSONParser) Parse(ctx context.Context, trigger graph.Node, stdo
 			},
 		})
 
+		// Link discovered URL to trigger (Service or URL).
+		if fromType == graph.NodeService {
+			result.Edges = append(result.Edges, graph.Edge{
+				Type:     graph.RelEXPOSES,
+				FromType: graph.NodeService,
+				FromKey:  fromKey,
+				ToType:   graph.NodeURL,
+				ToKey:    p.URL,
+			})
+		}
+
 		// If this looks like a JS file, also create a JSFile node.
 		if isJSURL(p.URL) {
 			key := jsFileIDFromURL(p.URL)
@@ -163,15 +180,13 @@ func (p *webscopeJSONParser) Parse(ctx context.Context, trigger graph.Node, stdo
 						"sha256":    "unknown",
 					},
 				})
-				if trigger.Type == graph.NodeURL {
-					result.Edges = append(result.Edges, graph.Edge{
-						Type:     graph.RelLOADS,
-						FromType: graph.NodeURL,
-						FromKey:  trigger.PrimaryKey,
-						ToType:   graph.NodeJSFile,
-						ToKey:    key,
-					})
-				}
+				result.Edges = append(result.Edges, graph.Edge{
+					Type:     graph.RelLOADS,
+					FromType: graph.NodeURL,
+					FromKey:  p.URL,
+					ToType:   graph.NodeJSFile,
+					ToKey:    key,
+				})
 			}
 		}
 	}
@@ -207,8 +222,8 @@ func (p *webscopeJSONParser) Parse(ctx context.Context, trigger graph.Node, stdo
 		})
 		result.Edges = append(result.Edges, graph.Edge{
 			Type:     graph.RelEXPOSES,
-			FromType: graph.NodeURL,
-			FromKey:  trigger.PrimaryKey,
+			FromType: fromType,
+			FromKey:  fromKey,
 			ToType:   graph.NodeEndpoint,
 			ToKey:    key,
 		})
@@ -311,14 +326,14 @@ func (p *webscopeJSONParser) Parse(ctx context.Context, trigger graph.Node, stdo
 		})
 		result.Edges = append(result.Edges, graph.Edge{
 			Type:     graph.RelRUNS,
-			FromType: graph.NodeURL,
-			FromKey:  trigger.PrimaryKey,
+			FromType: fromType,
+			FromKey:  fromKey,
 			ToType:   graph.NodeTechnology,
 			ToKey:    key,
 		})
 	}
 
-	// Process forms → Form nodes linked to trigger URL.
+	// Process forms → Form nodes linked to trigger.
 	for _, f := range out.Forms {
 		if f.Action == "" {
 			continue
@@ -345,8 +360,8 @@ func (p *webscopeJSONParser) Parse(ctx context.Context, trigger graph.Node, stdo
 		})
 		result.Edges = append(result.Edges, graph.Edge{
 			Type:     graph.RelCONTAINS,
-			FromType: graph.NodeURL,
-			FromKey:  trigger.PrimaryKey,
+			FromType: fromType,
+			FromKey:  fromKey,
 			ToType:   graph.NodeForm,
 			ToKey:    key,
 		})
@@ -398,8 +413,8 @@ func (p *webscopeJSONParser) Parse(ctx context.Context, trigger graph.Node, stdo
 		})
 		result.Edges = append(result.Edges, graph.Edge{
 			Type:     graph.RelEXPOSES,
-			FromType: graph.NodeURL,
-			FromKey:  trigger.PrimaryKey,
+			FromType: fromType,
+			FromKey:  fromKey,
 			ToType:   graph.NodeEndpoint,
 			ToKey:    epKey,
 		})

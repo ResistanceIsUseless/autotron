@@ -9,13 +9,13 @@ import (
 )
 
 func TestWebscopeJSONParser(t *testing.T) {
-	sample := `{"target":"https://dropzone.cbord.com","flow":"in-depth","paths":[{"url":"https://dropzone.cbord.com","status":200,"method":"GET","content_type":"text/html","source":"basic"},{"url":"https://dropzone.cbord.com/robots.txt","status":200,"method":"GET","content_type":"text/plain","source":"basic-common"},{"url":"https://dropzone.cbord.com/static/app.min.js","status":200,"method":"GET","content_type":"application/javascript","source":"deep-katana"},{"url":"https://dropzone.cbord.com/static/vendor.mjs","status":200,"method":"GET","content_type":"application/javascript","source":"deep-katana"}],"endpoints":[{"path":"/robots.txt","type":"common","method":"GET","source":"basic"},{"path":"/api/upload","type":"discovered","method":"POST","source":"deep-katana"}],"findings":[{"url":"https://dropzone.cbord.com/.env","type":"sensitive-path","severity":"high","details":"Potentially sensitive path discovered"}],"stats":{"requests_total":50,"requests_success":48}}`
+	sample := `{"target":"https://dropzone.example.com","flow":"in-depth","paths":[{"url":"https://dropzone.example.com","status":200,"method":"GET","content_type":"text/html","source":"basic"},{"url":"https://dropzone.example.com/robots.txt","status":200,"method":"GET","content_type":"text/plain","source":"basic-common"},{"url":"https://dropzone.example.com/static/app.min.js","status":200,"method":"GET","content_type":"application/javascript","source":"deep-katana"},{"url":"https://dropzone.example.com/static/vendor.mjs","status":200,"method":"GET","content_type":"application/javascript","source":"deep-katana"}],"endpoints":[{"path":"/robots.txt","type":"common","method":"GET","source":"basic"},{"path":"/api/upload","type":"discovered","method":"POST","source":"deep-katana"}],"findings":[{"url":"https://dropzone.example.com/.env","type":"sensitive-path","severity":"high","details":"Potentially sensitive path discovered"}],"stats":{"requests_total":50,"requests_success":48}}`
 
 	p := &webscopeJSONParser{}
 	trigger := graph.Node{
-		Type:       graph.NodeURL,
-		PrimaryKey: "https://dropzone.cbord.com",
-		Props:      map[string]any{"url": "https://dropzone.cbord.com"},
+		Type:       graph.NodeService,
+		PrimaryKey: "dropzone.example.com:443",
+		Props:      map[string]any{"fqdn": "dropzone.example.com", "port": "443", "product": "https"},
 	}
 
 	result, err := p.Parse(context.Background(), trigger, strings.NewReader(sample), strings.NewReader(""))
@@ -46,9 +46,9 @@ func TestWebscopeJSONParser(t *testing.T) {
 		t.Errorf("expected 2 Endpoint nodes, got %d", epCount)
 	}
 
-	// 2 LOADS edges (JS→trigger) + 2 EXPOSES edges (trigger→endpoint) = 4
-	if len(result.Edges) != 4 {
-		t.Errorf("expected 4 edges, got %d", len(result.Edges))
+	// 4 EXPOSES (Service→URL) + 2 LOADS (URL→JSFile) + 2 EXPOSES (Service→Endpoint) = 8
+	if len(result.Edges) != 8 {
+		t.Errorf("expected 8 edges, got %d", len(result.Edges))
 	}
 
 	if len(result.Findings) != 1 {

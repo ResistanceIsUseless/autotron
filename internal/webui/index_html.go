@@ -39,6 +39,7 @@ const indexHTML = `<!doctype html>
     .grid-stats { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
     .grid-2 { grid-template-columns: 1fr 1fr; }
     .grid-3 { grid-template-columns: 2fr 1fr 1fr; }
+    .grid > *, .grid-2 > *, .grid-3 > *, .grid-stats > * { min-width: 0; overflow: hidden; }
     @media (max-width: 900px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
 
     .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
@@ -90,7 +91,7 @@ const indexHTML = `<!doctype html>
     .badge-Service { background: rgba(125,207,255,0.15); color: var(--accent2); }
     .badge-URL { background: rgba(158,206,106,0.15); color: var(--green); }
     .badge-Domain { background: rgba(224,175,104,0.15); color: var(--yellow); }
-    .activity-label { color: var(--ink2); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .activity-label { color: var(--ink2); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; word-break: break-all; }
     .activity-time { color: var(--muted); font-size: 10px; white-space: nowrap; }
 
     .dns-toggle { background: none; border: none; color: var(--ink); padding: 0; cursor: pointer; font-weight: 600; font-family: inherit; font-size: 12px; }

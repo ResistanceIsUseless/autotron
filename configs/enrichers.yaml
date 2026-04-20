@@ -303,13 +303,13 @@ enrichers:
   - name: webscope_crawl
     parser: webscope_json
     subscribes:
-      node_type: URL
-      predicate: "n.status_code >= 200 AND n.status_code <= 399"
+      node_type: Service
+      predicate: "n.product IN ['http', 'https'] AND n.in_scope = true AND 'httpx_probe' IN coalesce(n.enriched_by, [])"
     command:
       bin: webscope
       args:
         - "-target"
-        - "{{.Node.url}}"
+        - "{{if eq .Node.product \"https\"}}https{{else}}http{{end}}://{{.Node.fqdn}}:{{.Node.port}}"
         - "-json"
         - "-quiet"
         - "-flow"
@@ -510,7 +510,12 @@ enrichers:
     weight: heavy
     subscribes:
       node_type: URL
-      predicate: "n.status_code = 200 AND 'webscope_crawl' IN coalesce(n.enriched_by, [])"
+      predicate: >
+        n.status_code = 200 AND
+        EXISTS {
+          MATCH (svc:Service)-[:EXPOSES]->(n)
+          WHERE 'webscope_crawl' IN coalesce(svc.enriched_by, [])
+        }
     command:
       bin: nuclei
       args:
@@ -531,7 +536,10 @@ enrichers:
       node_type: URL
       predicate: >
         n.status_code = 200 AND n.path <> '/' AND coalesce(n.server, '') <> '' AND
-        'webscope_crawl' IN coalesce(n.enriched_by, []) AND
+        EXISTS {
+          MATCH (svc:Service)-[:EXPOSES]->(n)
+          WHERE 'webscope_crawl' IN coalesce(svc.enriched_by, [])
+        } AND
         EXISTS {
           MATCH (u0:URL)
           WHERE u0.host = n.host AND u0.path = '/' AND coalesce(u0.server, '') <> ''
