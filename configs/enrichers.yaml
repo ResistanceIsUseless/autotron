@@ -301,17 +301,19 @@ enrichers:
   # --- Web crawling / enrichment ---
 
   - name: webscope_crawl
-    parser: webscope_jsonl
+    parser: webscope_json
     subscribes:
       node_type: URL
       predicate: "n.status_code >= 200 AND n.status_code <= 399"
     command:
       bin: webscope
       args:
-        - "-u"
+        - "-target"
         - "{{.Node.url}}"
-        - "-of"
-        - "jsonl"
+        - "-json"
+        - "-quiet"
+        - "-flow"
+        - "in-depth"
       timeout: 15m
       retries: 1
     concurrency: 8

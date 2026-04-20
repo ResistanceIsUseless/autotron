@@ -173,11 +173,29 @@ func (s *scheduler) pollAndDispatch(ctx context.Context, enricher config.Enriche
 		s.engine.dedup.Mark(node.PrimaryKey, edgeKey, enricher.Name)
 
 		dispatched++
+		log.Debug("dispatching job", "node", node.PrimaryKey, "enricher", enricher.Name)
 
 		// Pick worker pool based on weight.
 		pool := s.lightPool
 		if enricher.IsHeavy() {
 			pool = s.heavyPool
+		}
+
+		// Acquire pool slot BEFORE spawning goroutine to prevent unbounded
+		// goroutine accumulation that causes starvation across enrichers.
+		select {
+		case pool <- struct{}{}:
+		case <-ctx.Done():
+			return dispatched
+		}
+
+		// Acquire per-enricher semaphore.
+		sem := s.engine.semaphores[enricher.Name]
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			<-pool
+			return dispatched
 		}
 
 		s.inFlight.Add(1)
@@ -188,22 +206,7 @@ func (s *scheduler) pollAndDispatch(ctx context.Context, enricher config.Enriche
 		go func() {
 			defer wg.Done()
 			defer s.inFlight.Add(-1)
-
-			// Acquire pool slot.
-			select {
-			case pool <- struct{}{}:
-			case <-ctx.Done():
-				return
-			}
 			defer func() { <-pool }()
-
-			// Acquire per-enricher semaphore.
-			sem := s.engine.semaphores[enricher.Name]
-			select {
-			case sem <- struct{}{}:
-			case <-ctx.Done():
-				return
-			}
 			defer func() { <-sem }()
 
 			produced, err := s.engine.dispatchJobWithProduced(ctx, enricher, work, s.scanRunID)
