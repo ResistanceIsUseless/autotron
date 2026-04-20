@@ -258,7 +258,7 @@ enrichers:
       predicate: >
         n.in_scope = true AND svc.product IN ['http', 'https']
     command:
-      bin: httpx
+      bin: /Users/matthew/.pdtm/go/bin/httpx
       args:
         - "-u"
         - "{{.Node.fqdn}}"
@@ -270,6 +270,12 @@ enrichers:
         - "-status-code"
         - "-content-length"
         - "-follow-redirects"
+        - "-tls-grab"
+        - "-jarm"
+        - "-favicon"
+        - "-irh"
+        - "-hash"
+        - "sha256"
       timeout: 5m
       retries: 1
     concurrency: 16
@@ -466,7 +472,7 @@ enrichers:
       returns:
         - "svc.port AS port"
         - "svc.product AS service_product"
-      predicate: "n.in_scope = true AND svc.product IN ['http', 'https'] AND svc.port = 443"
+      predicate: "n.in_scope = true AND svc.product IN ['http', 'https'] AND svc.port = 443 AND 'httpx_probe' IN coalesce(n.enriched_by, [])"
     command:
       bin: nuclei
       args:
@@ -477,7 +483,7 @@ enrichers:
         - "low,medium,high,critical"
       timeout: 20m
       retries: 1
-    concurrency: 2
+    concurrency: 4
     enabled: true
 
   - name: nikto_root_https
@@ -489,7 +495,7 @@ enrichers:
       returns:
         - "svc.port AS port"
         - "svc.product AS service_product"
-      predicate: "n.in_scope = true AND svc.product IN ['http', 'https'] AND svc.port = 443"
+      predicate: "n.in_scope = true AND svc.product IN ['http', 'https'] AND svc.port = 443 AND 'nuclei_root_https' IN coalesce(n.enriched_by, [])"
     command:
       bin: sh
       args:
@@ -505,7 +511,7 @@ enrichers:
     weight: heavy
     subscribes:
       node_type: URL
-      predicate: "n.status_code = 200"
+      predicate: "n.status_code = 200 AND 'webscope_crawl' IN coalesce(n.enriched_by, [])"
     command:
       bin: nuclei
       args:
@@ -526,6 +532,7 @@ enrichers:
       node_type: URL
       predicate: >
         n.status_code = 200 AND n.path <> '/' AND coalesce(n.server, '') <> '' AND
+        'webscope_crawl' IN coalesce(n.enriched_by, []) AND
         EXISTS {
           MATCH (u0:URL)
           WHERE u0.host = n.host AND u0.path = '/' AND coalesce(u0.server, '') <> ''
@@ -551,6 +558,7 @@ enrichers:
       node_type: URL
       predicate: >
         n.status_code = 200 AND n.path <> '/' AND coalesce(n.server, '') <> '' AND
+        'nuclei_server_variant_url' IN coalesce(n.enriched_by, []) AND
         EXISTS {
           MATCH (u0:URL)
           WHERE u0.host = n.host AND u0.path = '/' AND coalesce(u0.server, '') <> ''
@@ -894,7 +902,7 @@ enrichers:
     parser: web_vuln_generic
     subscribes:
       node_type: URL
-      predicate: "n.status_code = 200"
+      predicate: "n.status_code = 200 AND 'nuclei_tech' IN coalesce(n.enriched_by, [])"
     command:
       bin: sh
       # Nikto 2.5/2.6 JSON output shape
