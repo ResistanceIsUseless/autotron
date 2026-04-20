@@ -179,10 +179,20 @@ const indexHTML = `<!doctype html>
     <div class="card section">
       <div class="card-header">
         <span class="card-title">Hosts</span>
-        <span class="tiny" style="color:var(--muted)">click to expand</span>
+        <div class="toolbar">
+          <input id="hostSearch" placeholder="search hosts..." style="width:200px;" oninput="renderServices()" />
+          <select id="hostFilter" onchange="renderServices()">
+            <option value="">All</option>
+            <option value="tls">TLS Only</option>
+            <option value="cdn">CDN</option>
+            <option value="wildcard">Wildcard Cert</option>
+            <option value="expiring">Cert Expiring &lt;30d</option>
+          </select>
+          <span class="tiny" style="color:var(--muted)" id="hostCount">-</span>
+        </div>
       </div>
       <table>
-        <thead><tr><th>Host</th><th>Ports</th><th>Last Seen</th></tr></thead>
+        <thead><tr><th>Host</th><th>Ports</th><th>CDN</th><th>Last Seen</th></tr></thead>
         <tbody id="serviceRows"></tbody>
       </table>
     </div>
@@ -271,7 +281,7 @@ const indexHTML = `<!doctype html>
     }
 
     // --- State ---
-    let jsItems = [], monitoredSet = new Set(), scanIsRunning = false;
+    let jsItems = [], monitoredSet = new Set(), scanIsRunning = false, allServiceItems = [];
     let changePage = { limit: 50, offset: 0, has_more: false };
     let expandedServiceGroups = new Set(), serviceGroupMap = {};
     let pollTimer = null;
@@ -358,57 +368,121 @@ const indexHTML = `<!doctype html>
     }
 
     async function loadServices() {
-      const data = await j('/api/data/services?limit=200');
-      const items = data.items || [];
+      const data = await j('/api/data/services?limit=500');
+      allServiceItems = data.items || [];
+      renderServices();
+    }
+
+    function renderServices() {
+      const items = allServiceItems;
+      const q = (document.getElementById('hostSearch').value||'').trim().toLowerCase();
+      const filter = document.getElementById('hostFilter').value;
+      const now = Date.now();
+      const thirtyDays = 30*86400*1000;
+
       const groups = new Map();
       for (const s of items) {
         const key = String(s.dns_name||'').trim() || '(no dns)';
         (groups.get(key) || (groups.set(key, []), groups.get(key))).push(s);
       }
+
       const ordered = Array.from(groups.entries()).sort((a,b) => {
         const at = Math.max(...a[1].map(x => Date.parse(x.last_seen||'')||0));
         const bt = Math.max(...b[1].map(x => Date.parse(x.last_seen||'')||0));
         return bt - at;
+      }).filter(([dns, services]) => {
+        if (q) {
+          const haystack = (dns + ' ' +
+            services.map(s => [s.ip, s.server, s.product, s.version, s.banner, s.tls_issuer_org, s.cdn_name, s.jarm, s.tls_subject_cn, s.tls_sans].join(' ')).join(' ')
+          ).toLowerCase();
+          if (!haystack.includes(q)) return false;
+        }
+        if (filter === 'tls' && !services.some(s => s.tls)) return false;
+        if (filter === 'cdn' && !services.some(s => s.cdn || s.cdn_name)) return false;
+        if (filter === 'wildcard' && !services.some(s => s.tls_wildcard)) return false;
+        if (filter === 'expiring') {
+          if (!services.some(s => { if (!s.tls_not_after) return false; const exp = Date.parse(s.tls_not_after); return exp && (exp - now) < thirtyDays && (exp - now) > 0; })) return false;
+        }
+        return true;
       });
+
+      document.getElementById('hostCount').textContent = ordered.length + ' hosts';
+
       const html = [];
       serviceGroupMap = {};
       for (let i = 0; i < ordered.length; i++) {
         const [dns, services] = ordered[i];
         const gid = 'g' + i;
         serviceGroupMap[gid] = dns;
-        const exp = expandedServiceGroups.has(gid);
+        const exp = expandedServiceGroups.has(dns);
         const last = services.map(s=>s.last_seen||'').filter(Boolean).sort().reverse()[0]||'';
-        const ip0 = services[0]?.ip || '';
-        html.push('<tr><td><button class="dns-toggle" onclick="toggleSG(\'' + gid + '\')"><span class="dns-caret">' + (exp?'&#9662;':'&#9656;') + '</span>' + esc(dns) + '</button></td><td class="tiny">' + services.map(s=>s.port).join(', ') + '</td><td class="tiny">' + relTime(last) + '</td></tr>');
+        const cdnLabel = services.map(s=>s.cdn_name).filter(Boolean).filter((v,j,a)=>a.indexOf(v)===j).join(', ');
+        html.push('<tr><td><button class="dns-toggle" onclick="toggleSG(\'' + esc(dns).replace(/'/g, "\\\\'") + '\')"><span class="dns-caret">' + (exp?'&#9662;':'&#9656;') + '</span>' + esc(dns) + '</button></td><td class="tiny">' + services.map(s=>s.port).join(', ') + '</td><td class="tiny" style="color:var(--accent2)">' + esc(cdnLabel) + '</td><td class="tiny">' + relTime(last) + '</td></tr>');
         if (exp) {
-          html.push('<tr><td colspan="3" style="padding:0 0 0 28px;border-bottom:none;">' +
-            '<table style="width:100%;margin:2px 0 6px 0;"><thead><tr>' +
-            '<th style="width:80px">PORT</th><th style="width:60px">STATE</th><th style="width:100px">SERVICE</th><th>VERSION</th>' +
-            '</tr></thead><tbody>');
           for (const s of services) {
             const proto = s.tls ? 'tcp/tls' : 'tcp';
             const svc = s.product || (s.tls ? 'https' : 'http');
-            const ver = [s.version, s.server, s.banner].filter(Boolean).filter((v,i,a) => a.indexOf(v)===i).join(' ');
+            const ver = [s.version, s.server, s.banner].filter(Boolean).filter((v,j,a) => a.indexOf(v)===j).join(' ');
             const stateColor = s.status === 'open' ? 'var(--green)' : s.status === 'filtered' ? 'var(--yellow)' : 'var(--muted)';
-            html.push('<tr>' +
-              '<td class="tiny"><span style="color:var(--accent2)">' + esc(s.port) + '/' + proto + '</span></td>' +
-              '<td class="tiny"><span style="color:' + stateColor + '">' + esc(s.status||'open') + '</span></td>' +
-              '<td class="tiny">' + esc(svc) + '</td>' +
-              '<td class="tiny" style="color:var(--ink2)">' + esc(ver||'-') + '</td>' +
-            '</tr>');
+
+            html.push('<tr><td colspan="4" style="padding:0 0 0 28px;border-bottom:none;">');
+            html.push('<table style="width:100%;margin:2px 0 4px 0;">');
+            html.push('<tr>');
+            html.push('<td class="tiny" style="width:80px"><span style="color:var(--accent2)">' + esc(s.port) + '/' + proto + '</span></td>');
+            html.push('<td class="tiny" style="width:60px"><span style="color:' + stateColor + '">' + esc(s.status||'open') + '</span></td>');
+            html.push('<td class="tiny" style="width:100px">' + esc(svc) + '</td>');
+            html.push('<td class="tiny" style="color:var(--ink2)">' + esc(ver||'-') + '</td>');
+            html.push('</tr>');
+
+            if (s.tls_subject_cn || s.tls_issuer_org) {
+              const expiryDate = s.tls_not_after ? new Date(s.tls_not_after) : null;
+              const expiryColor = expiryDate && (expiryDate - now) < thirtyDays ? 'var(--red)' : expiryDate && (expiryDate - now) < 90*86400*1000 ? 'var(--yellow)' : 'var(--muted)';
+              const wc = s.tls_wildcard ? ' <span class="pill sev-info">wildcard</span>' : '';
+
+              html.push('<tr><td colspan="4" style="padding:2px 8px;border-bottom:none;">');
+              html.push('<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:11px;">');
+              html.push('<span><span style="color:var(--muted)">CN:</span> <span style="color:var(--ink2)">' + esc(s.tls_subject_cn) + '</span>' + wc + '</span>');
+              html.push('<span><span style="color:var(--muted)">Issuer:</span> <span style="color:var(--ink2)">' + esc(s.tls_issuer_org || s.tls_issuer_cn) + '</span></span>');
+              html.push('<span><span style="color:var(--muted)">TLS:</span> <span style="color:var(--ink2)">' + esc(s.tls_version) + ' / ' + esc(s.tls_cipher) + '</span></span>');
+              if (s.tls_not_after) {
+                html.push('<span><span style="color:var(--muted)">Expires:</span> <span style="color:' + expiryColor + '">' + esc(s.tls_not_after.split('T')[0]) + ' (' + relTime(s.tls_not_after) + ')</span></span>');
+              }
+              html.push('</div>');
+              if (s.tls_sans) {
+                html.push('<div class="tiny" style="color:var(--muted);margin-top:2px;">SANs: <span style="color:var(--ink2)">' + esc(s.tls_sans) + '</span></div>');
+              }
+              html.push('</td></tr>');
+            }
+
+            if (s.jarm) {
+              html.push('<tr><td colspan="4" style="padding:2px 8px;border-bottom:none;font-size:11px;">');
+              html.push('<span style="color:var(--muted)">JARM:</span> <span style="color:var(--purple);font-family:monospace;font-size:10px;">' + esc(s.jarm) + '</span>');
+              html.push('</td></tr>');
+            }
+
+            if (s.cdn_name) {
+              html.push('<tr><td colspan="4" style="padding:2px 8px;border-bottom:none;font-size:11px;">');
+              html.push('<span style="color:var(--muted)">CDN:</span> <span style="color:var(--accent2)">' + esc(s.cdn_name) + (s.cdn_type ? ' (' + esc(s.cdn_type) + ')' : '') + '</span>');
+              html.push('</td></tr>');
+            }
+
+            if (s.ip) {
+              html.push('<tr><td colspan="4" style="padding:2px 8px;border-bottom:none;font-size:11px;">');
+              html.push('<span style="color:var(--muted)">IP:</span> <span style="color:var(--ink2)">' + esc(s.ip) + '</span>');
+              html.push('</td></tr>');
+            }
+
+            html.push('</table></td></tr>');
           }
-          if (ip0) {
-            html.push('<tr><td colspan="4" class="tiny" style="color:var(--muted);border-bottom:none;padding-top:2px;">IP: ' + esc(ip0) + '</td></tr>');
-          }
-          html.push('</tbody></table></td></tr>');
+          html.push('<tr><td colspan="4" style="border-bottom:2px solid var(--line);padding:0;"></td></tr>');
         }
       }
       document.getElementById('serviceRows').innerHTML = html.join('');
     }
-    function toggleSG(gid) {
-      if (expandedServiceGroups.has(gid)) expandedServiceGroups.delete(gid);
-      else expandedServiceGroups.add(gid);
-      loadServices();
+    function toggleSG(dns) {
+      if (expandedServiceGroups.has(dns)) expandedServiceGroups.delete(dns);
+      else expandedServiceGroups.add(dns);
+      renderServices();
     }
 
     async function loadURLs() {

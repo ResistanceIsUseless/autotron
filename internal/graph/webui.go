@@ -52,6 +52,26 @@ type ServiceView struct {
 	Server   string `json:"server"`
 	Banner   string `json:"banner"`
 	LastSeen string `json:"last_seen"`
+
+	// TLS certificate details (from httpx_probe)
+	TLSVersion   string `json:"tls_version,omitempty"`
+	TLSCipher    string `json:"tls_cipher,omitempty"`
+	TLSSubjectCN string `json:"tls_subject_cn,omitempty"`
+	TLSIssuerCN  string `json:"tls_issuer_cn,omitempty"`
+	TLSIssuerOrg string `json:"tls_issuer_org,omitempty"`
+	TLSNotBefore string `json:"tls_not_before,omitempty"`
+	TLSNotAfter  string `json:"tls_not_after,omitempty"`
+	TLSSANs      string `json:"tls_sans,omitempty"`
+	TLSWildcard  bool   `json:"tls_wildcard,omitempty"`
+	TLSSHA256    string `json:"tls_fingerprint_sha256,omitempty"`
+
+	// JARM fingerprint
+	JARM string `json:"jarm,omitempty"`
+
+	// CDN detection
+	CDN     bool   `json:"cdn,omitempty"`
+	CDNName string `json:"cdn_name,omitempty"`
+	CDNType string `json:"cdn_type,omitempty"`
 }
 
 func (c *Client) NodeCounts(ctx context.Context) ([]NodeCount, error) {
@@ -258,18 +278,26 @@ WITH s,
      coalesce(s.tls, false) AS tls,
      coalesce(s.server, '') AS server,
      coalesce(s.banner, '') AS banner,
-     coalesce(s.last_seen, '') AS last_seen
+     coalesce(s.last_seen, '') AS last_seen,
+     coalesce(s.tls_version, '') AS tls_version,
+     coalesce(s.tls_cipher, '') AS tls_cipher,
+     coalesce(s.tls_subject_cn, '') AS tls_subject_cn,
+     coalesce(s.tls_issuer_cn, '') AS tls_issuer_cn,
+     coalesce(s.tls_issuer_org, '') AS tls_issuer_org,
+     coalesce(s.tls_not_before, '') AS tls_not_before,
+     coalesce(s.tls_not_after, '') AS tls_not_after,
+     coalesce(s.tls_sans, '') AS tls_sans,
+     coalesce(s.tls_wildcard, false) AS tls_wildcard,
+     coalesce(s.tls_fingerprint_sha256, '') AS tls_sha256,
+     coalesce(s.jarm, '') AS jarm,
+     coalesce(s.cdn, false) AS cdn,
+     coalesce(s.cdn_name, '') AS cdn_name,
+     coalesce(s.cdn_type, '') AS cdn_type
 RETURN
-  fqdn,
-  ip,
-  port,
-  product,
-  version,
-  status,
-  tls,
-  server,
-  banner,
-  last_seen,
+  fqdn, ip, port, product, version, status, tls, server, banner, last_seen,
+  tls_version, tls_cipher, tls_subject_cn, tls_issuer_cn, tls_issuer_org,
+  tls_not_before, tls_not_after, tls_sans, tls_wildcard, tls_sha256,
+  jarm, cdn, cdn_name, cdn_type,
   CASE WHEN size(dns_names) > 0 THEN dns_names[0] ELSE fqdn END AS dns_name,
   size(dns_names) AS dns_count
 ORDER BY last_seen DESC
@@ -286,18 +314,32 @@ LIMIT $limit`
 		fqdn := fmt.Sprintf("%v", recordValue(rec, "fqdn"))
 		port := toInt64(recordValue(rec, "port"))
 		out = append(out, ServiceView{
-			Service:  fmt.Sprintf("%s:%d", fqdn, port),
-			DNSName:  fmt.Sprintf("%v", recordValue(rec, "dns_name")),
-			DNSCount: toInt64(recordValue(rec, "dns_count")),
-			IP:       fmt.Sprintf("%v", recordValue(rec, "ip")),
-			Port:     port,
-			Product:  fmt.Sprintf("%v", recordValue(rec, "product")),
-			Version:  fmt.Sprintf("%v", recordValue(rec, "version")),
-			Status:   fmt.Sprintf("%v", recordValue(rec, "status")),
-			TLS:      toBool(recordValue(rec, "tls")),
-			Server:   fmt.Sprintf("%v", recordValue(rec, "server")),
-			Banner:   fmt.Sprintf("%v", recordValue(rec, "banner")),
-			LastSeen: fmt.Sprintf("%v", recordValue(rec, "last_seen")),
+			Service:      fmt.Sprintf("%s:%d", fqdn, port),
+			DNSName:      fmt.Sprintf("%v", recordValue(rec, "dns_name")),
+			DNSCount:     toInt64(recordValue(rec, "dns_count")),
+			IP:           fmt.Sprintf("%v", recordValue(rec, "ip")),
+			Port:         port,
+			Product:      fmt.Sprintf("%v", recordValue(rec, "product")),
+			Version:      fmt.Sprintf("%v", recordValue(rec, "version")),
+			Status:       fmt.Sprintf("%v", recordValue(rec, "status")),
+			TLS:          toBool(recordValue(rec, "tls")),
+			Server:       fmt.Sprintf("%v", recordValue(rec, "server")),
+			Banner:       fmt.Sprintf("%v", recordValue(rec, "banner")),
+			LastSeen:     fmt.Sprintf("%v", recordValue(rec, "last_seen")),
+			TLSVersion:   fmt.Sprintf("%v", recordValue(rec, "tls_version")),
+			TLSCipher:    fmt.Sprintf("%v", recordValue(rec, "tls_cipher")),
+			TLSSubjectCN: fmt.Sprintf("%v", recordValue(rec, "tls_subject_cn")),
+			TLSIssuerCN:  fmt.Sprintf("%v", recordValue(rec, "tls_issuer_cn")),
+			TLSIssuerOrg: fmt.Sprintf("%v", recordValue(rec, "tls_issuer_org")),
+			TLSNotBefore: fmt.Sprintf("%v", recordValue(rec, "tls_not_before")),
+			TLSNotAfter:  fmt.Sprintf("%v", recordValue(rec, "tls_not_after")),
+			TLSSANs:      fmt.Sprintf("%v", recordValue(rec, "tls_sans")),
+			TLSWildcard:  toBool(recordValue(rec, "tls_wildcard")),
+			TLSSHA256:    fmt.Sprintf("%v", recordValue(rec, "tls_sha256")),
+			JARM:         fmt.Sprintf("%v", recordValue(rec, "jarm")),
+			CDN:          toBool(recordValue(rec, "cdn")),
+			CDNName:      fmt.Sprintf("%v", recordValue(rec, "cdn_name")),
+			CDNType:      fmt.Sprintf("%v", recordValue(rec, "cdn_type")),
 		})
 	}
 	if err := result.Err(); err != nil {

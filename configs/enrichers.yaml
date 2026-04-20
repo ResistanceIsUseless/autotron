@@ -195,7 +195,7 @@ enrichers:
       timeout: 4m
       retries: 0
     concurrency: 8
-    enabled: true
+    enabled: false  # disabled — times out on most hosts; httpx_probe covers headers/tech
 
   - name: nmap_ssl_enum
     parser: nmap_xml
@@ -218,7 +218,7 @@ enrichers:
       timeout: 5m
       retries: 1
     concurrency: 6
-    enabled: true
+    enabled: false  # disabled — httpx_probe now grabs TLS/cipher data
 
   # --- TLS / Certificate ---
 
@@ -242,7 +242,7 @@ enrichers:
       timeout: 2m
       retries: 1
     concurrency: 8
-    enabled: true
+    enabled: false  # disabled — httpx_probe now grabs TLS/cert data
 
   # --- HTTP probing (DNS-first rule) ---
 
@@ -252,7 +252,6 @@ enrichers:
       node_type: Subdomain
       match: "-[:HAS_SERVICE]->(svc:Service)"
       returns:
-        - "coalesce(svc.ip, '') AS resolved_ip"
         - "svc.port AS port"
         - "svc.product AS service_product"
       predicate: >
@@ -261,9 +260,7 @@ enrichers:
       bin: /Users/matthew/.pdtm/go/bin/httpx
       args:
         - "-u"
-        - "{{.Node.fqdn}}"
-        - "-resolve"
-        - "{{.Node.fqdn}}:{{.Edge.port}}:{{.Edge.resolved_ip}}"
+        - "{{.Node.fqdn}}:{{.Edge.port}}"
         - "-json"
         - "-tech-detect"
         - "-title"

@@ -135,7 +135,7 @@ func (s *scheduler) pollAndDispatch(ctx context.Context, enricher config.Enriche
 		return 0
 	}
 
-	log.Debug("found pending nodes", "count", len(pending))
+	log.Info("found pending nodes", "count", len(pending))
 
 	dispatched := 0
 	var wg sync.WaitGroup
